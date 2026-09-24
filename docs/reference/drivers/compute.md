@@ -286,6 +286,17 @@ record is neither a live health check nor an acknowledgment, and restarting
 recalculates it. Missing or untrusted startup status cannot
 prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-startup-status).
 
+## Workload tags
+
+Revision lifecycle methods and hooks use immutable [`revision.tags`](../agents/workload-tags.md),
+never mutable `bindAgent` drafts.
+
+Tags cannot configure shared infrastructure. Labels stay platform-owned. Never copy
+arbitrary tags into selectors, environment, commands, or telemetry.
+[Conditional Sandbox preparation](sandbox.md#conditional-workload-preparation)
+demonstrates operator-approved backend settings.
+Preparation must be idempotent and unwind through exact-revision cleanup.
+
 ## Limits
 
 - Implementations differ in topology, credentials, Namespace deletion, and

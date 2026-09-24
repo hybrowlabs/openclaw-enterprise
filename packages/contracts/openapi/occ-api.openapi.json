@@ -12044,6 +12044,23 @@
                                   { "const": "active", "type": "string" },
                                   { "const": "deleting", "type": "string" }
                                 ]
+                              },
+                              "tags": {
+                                "additionalProperties": {
+                                  "maxLength": 1024,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                  "type": "string"
+                                },
+                                "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                                "maxProperties": 64,
+                                "properties": {},
+                                "propertyNames": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                  "type": "string"
+                                },
+                                "type": "object"
                               }
                             },
                             "required": [
@@ -12051,6 +12068,7 @@
                               "namespaceId",
                               "name",
                               "servicePrincipalId",
+                              "tags",
                               "configurationId",
                               "backendId",
                               "harnessAuth",
@@ -12147,6 +12165,23 @@
                                   { "const": "active", "type": "string" },
                                   { "const": "deleting", "type": "string" }
                                 ]
+                              },
+                              "tags": {
+                                "additionalProperties": {
+                                  "maxLength": 1024,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                  "type": "string"
+                                },
+                                "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                                "maxProperties": 64,
+                                "properties": {},
+                                "propertyNames": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                  "type": "string"
+                                },
+                                "type": "object"
                               }
                             },
                             "required": [
@@ -12154,6 +12189,7 @@
                               "namespaceId",
                               "name",
                               "servicePrincipalId",
+                              "tags",
                               "configurationId",
                               "backendId",
                               "executionMode",
@@ -12490,6 +12526,23 @@
                     "maxItems": 16,
                     "type": "array"
                   },
+                  "tags": {
+                    "additionalProperties": {
+                      "maxLength": 1024,
+                      "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                      "type": "string"
+                    },
+                    "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                    "maxProperties": 64,
+                    "properties": {},
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "workspaceDefaultsId": { "pattern": "^[a-f0-9]{64}$", "type": "string" }
                 },
                 "required": ["name", "configurationId"],
@@ -12759,6 +12812,23 @@
                             { "const": "active", "type": "string" },
                             { "const": "deleting", "type": "string" }
                           ]
+                        },
+                        "tags": {
+                          "additionalProperties": {
+                            "maxLength": 1024,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                            "type": "string"
+                          },
+                          "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                          "maxProperties": 64,
+                          "properties": {},
+                          "propertyNames": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                            "type": "string"
+                          },
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -12766,6 +12836,7 @@
                         "namespaceId",
                         "name",
                         "servicePrincipalId",
+                        "tags",
                         "configurationId",
                         "backendId",
                         "harnessAuth",
@@ -15303,6 +15374,23 @@
                             { "const": "active", "type": "string" },
                             { "const": "deleting", "type": "string" }
                           ]
+                        },
+                        "tags": {
+                          "additionalProperties": {
+                            "maxLength": 1024,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                            "type": "string"
+                          },
+                          "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                          "maxProperties": 64,
+                          "properties": {},
+                          "propertyNames": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                            "type": "string"
+                          },
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -15310,6 +15398,7 @@
                         "namespaceId",
                         "name",
                         "servicePrincipalId",
+                        "tags",
                         "configurationId",
                         "backendId",
                         "harnessAuth",
@@ -15676,6 +15765,23 @@
                                 { "const": "active", "type": "string" },
                                 { "const": "deleting", "type": "string" }
                               ]
+                            },
+                            "tags": {
+                              "additionalProperties": {
+                                "maxLength": 1024,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                "type": "string"
+                              },
+                              "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                              "maxProperties": 64,
+                              "properties": {},
+                              "propertyNames": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                "type": "string"
+                              },
+                              "type": "object"
                             }
                           },
                           "required": [
@@ -15683,6 +15789,7 @@
                             "namespaceId",
                             "name",
                             "servicePrincipalId",
+                            "tags",
                             "configurationId",
                             "backendId",
                             "harnessAuth",
@@ -15779,6 +15886,23 @@
                                 { "const": "active", "type": "string" },
                                 { "const": "deleting", "type": "string" }
                               ]
+                            },
+                            "tags": {
+                              "additionalProperties": {
+                                "maxLength": 1024,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                "type": "string"
+                              },
+                              "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                              "maxProperties": 64,
+                              "properties": {},
+                              "propertyNames": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                "type": "string"
+                              },
+                              "type": "object"
                             }
                           },
                           "required": [
@@ -15786,6 +15910,7 @@
                             "namespaceId",
                             "name",
                             "servicePrincipalId",
+                            "tags",
                             "configurationId",
                             "backendId",
                             "executionMode",
@@ -16097,6 +16222,23 @@
                     },
                     "maxItems": 16,
                     "type": "array"
+                  },
+                  "tags": {
+                    "additionalProperties": {
+                      "maxLength": 1024,
+                      "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                      "type": "string"
+                    },
+                    "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                    "maxProperties": 64,
+                    "properties": {},
+                    "propertyNames": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                      "type": "string"
+                    },
+                    "type": "object"
                   }
                 },
                 "required": ["configurationId"],
@@ -16366,6 +16508,23 @@
                             { "const": "active", "type": "string" },
                             { "const": "deleting", "type": "string" }
                           ]
+                        },
+                        "tags": {
+                          "additionalProperties": {
+                            "maxLength": 1024,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                            "type": "string"
+                          },
+                          "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                          "maxProperties": 64,
+                          "properties": {},
+                          "propertyNames": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                            "type": "string"
+                          },
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -16373,6 +16532,7 @@
                         "namespaceId",
                         "name",
                         "servicePrincipalId",
+                        "tags",
                         "configurationId",
                         "backendId",
                         "harnessAuth",
@@ -17115,7 +17275,24 @@
                           "maxProperties": 64,
                           "type": "object"
                         },
-                        "secretDriverId": { "minLength": 1, "type": "string" }
+                        "secretDriverId": { "minLength": 1, "type": "string" },
+                        "tags": {
+                          "additionalProperties": {
+                            "maxLength": 1024,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                            "type": "string"
+                          },
+                          "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                          "maxProperties": 64,
+                          "properties": {},
+                          "propertyNames": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
                       },
                       "required": [
                         "id",
@@ -17123,6 +17300,7 @@
                         "agentId",
                         "revision",
                         "backendId",
+                        "tags",
                         "configurationId",
                         "configurationKind",
                         "configurationGeneration",
@@ -20327,7 +20505,24 @@
                                 "maxProperties": 64,
                                 "type": "object"
                               },
-                              "secretDriverId": { "minLength": 1, "type": "string" }
+                              "secretDriverId": { "minLength": 1, "type": "string" },
+                              "tags": {
+                                "additionalProperties": {
+                                  "maxLength": 1024,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                  "type": "string"
+                                },
+                                "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                                "maxProperties": 64,
+                                "properties": {},
+                                "propertyNames": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              }
                             },
                             "required": [
                               "id",
@@ -20335,6 +20530,7 @@
                               "agentId",
                               "revision",
                               "backendId",
+                              "tags",
                               "configurationId",
                               "configurationKind",
                               "configurationGeneration",
@@ -20810,7 +21006,24 @@
                               "maxProperties": 64,
                               "type": "object"
                             },
-                            "secretDriverId": { "minLength": 1, "type": "string" }
+                            "secretDriverId": { "minLength": 1, "type": "string" },
+                            "tags": {
+                              "additionalProperties": {
+                                "maxLength": 1024,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                                "type": "string"
+                              },
+                              "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                              "maxProperties": 64,
+                              "properties": {},
+                              "propertyNames": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                                "type": "string"
+                              },
+                              "type": "object"
+                            }
                           },
                           "required": [
                             "id",
@@ -20818,6 +21031,7 @@
                             "agentId",
                             "revision",
                             "backendId",
+                            "tags",
                             "configurationId",
                             "configurationKind",
                             "configurationGeneration",
@@ -21612,6 +21826,23 @@
                             { "const": "active", "type": "string" },
                             { "const": "deleting", "type": "string" }
                           ]
+                        },
+                        "tags": {
+                          "additionalProperties": {
+                            "maxLength": 1024,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]*$",
+                            "type": "string"
+                          },
+                          "description": "Agent-owned, non-secret workload metadata. Keys and values are case-sensitive and preserved exactly; at most 64 entries are accepted.",
+                          "maxProperties": 64,
+                          "properties": {},
+                          "propertyNames": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000\\uD800-\\uDFFF]+$",
+                            "type": "string"
+                          },
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -21619,6 +21850,7 @@
                         "namespaceId",
                         "name",
                         "servicePrincipalId",
+                        "tags",
                         "configurationId",
                         "backendId",
                         "harnessAuth",

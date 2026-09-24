@@ -29,6 +29,7 @@ const agent = Object.freeze({
   configurationId: "cfg_runtime_00000000-0000-4000-8000-000000000001",
   backendId: null,
   executionMode: "dedicated",
+  tags: {},
   servicePrincipalId: "sp_runtime_00000000-0000-4000-8000-000000000001",
   createdAt: namespace.createdAt,
 });
@@ -704,6 +705,7 @@ test("embedded Gateway uses the separate canonical password source", () => {
     configurationId: "cfg_runtime_password_projection",
     configurationKind: "agent",
     configurationGeneration: 1,
+    tags: {},
     configuration: {
       logging: { level: "info", consoleLevel: "info", consoleStyle: "json" },
       diagnostics: { otel: { logs: false } },

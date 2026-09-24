@@ -22,6 +22,7 @@ import type {
   AgentRuntimeDescription,
   ComputeAgentRevisionBinding,
   AgentRevision,
+  AgentTags,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
   AccessBinding,
@@ -563,6 +564,7 @@ export interface CreateAgentInput {
   readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
   readonly repositoryAccess?: RepositoryAccess;
+  readonly tags?: AgentTags;
 }
 
 export interface UpdateAgentInput {
@@ -576,6 +578,7 @@ export interface UpdateAgentInput {
   readonly pluginApprovers?: PluginApprovers | null;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
   readonly repositoryAccess?: RepositoryAccess;
+  readonly tags?: AgentTags;
 }
 
 export interface LookupChannelDirectoryInput {
@@ -5394,6 +5397,7 @@ export class OpenClawController {
     const plugins = normalizeAgentPlugins(input.plugins);
     const pluginApprovers = normalizeAgentPluginApprovers(input.pluginApprovers);
     this.namespaceIdentity(input.namespaceId);
+    const tags = immutableCopy(input.tags === undefined ? {} : input.tags);
     return this.mutate(async (state) => {
       const target: ResourceRef = {
         kind: "agent",
@@ -5445,6 +5449,7 @@ export class OpenClawController {
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
         ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
+        tags,
         servicePrincipalId: `service-agent-${agentId}`,
         desiredRuntimeState: "stopped",
         status: "active",
@@ -5480,6 +5485,7 @@ export class OpenClawController {
     const pluginApprovers =
       input.pluginApprovers === null ? null : normalizeAgentPluginApprovers(input.pluginApprovers);
     this.namespaceIdentity(input.namespaceId);
+    const tags = input.tags === undefined ? undefined : immutableCopy(input.tags);
     return this.mutate(async (state) => {
       await this.authorize(principalId, "update", {
         kind: "agent",
@@ -5544,6 +5550,7 @@ export class OpenClawController {
         repositoryBindings,
         pluginApprovers,
         repositoryAccess,
+        tags,
       );
       if (!updated) {
         throw new ResourceStateConflictError("The Agent Configuration changed during its update.");
@@ -5790,10 +5797,15 @@ export class OpenClawController {
           throw new DependencyUnavailableError("The Secret backend identity changed.");
         }
       }
+      const admittedTags = immutableCopy(lockedAgent.tags);
       const sandboxConfiguration =
         sandbox?.configureAgent !== undefined
           ? frozenValues(
-              sandbox.configureAgent(frozenValues(configuration.values), revisionHarness),
+              sandbox.configureAgent(
+                frozenValues(configuration.values),
+                revisionHarness,
+                admittedTags,
+              ),
             )
           : configuration.values;
       const admittedConfiguration = frozenValues(
@@ -5920,6 +5932,7 @@ export class OpenClawController {
           configurationKind: configuration.kind,
           configurationGeneration: configuration.generation,
           configuration: admittedConfiguration,
+          tags: admittedTags,
           harness: revisionHarness,
           compute: { id: compute.id, implementation: compute.implementation },
           ...(sandbox === undefined ? {} : { sandboxDriverId: sandbox.id }),
@@ -7161,7 +7174,11 @@ export class OpenClawController {
       runtimeImage: !statusRead,
     });
     const configuration =
-      sandbox?.configureAgent?.(plan.configuration.values, harness) ?? plan.configuration.values;
+      sandbox?.configureAgent?.(
+        plan.configuration.values,
+        harness,
+        immutableCopy(agent?.tags ?? {}),
+      ) ?? plan.configuration.values;
     if (resolveConfiguredHarnessId(configuration) !== harness.id) {
       throw new ScopeViolationError("A Sandbox Driver cannot change the selected Harness runtime.");
     }
@@ -7641,6 +7658,7 @@ export class OpenClawController {
           id: agentId,
           namespaceId: namespace.id,
           name,
+          tags: {},
           configurationId: metadata.id,
           backendId,
           harnessAuth: plan.harnessAuth,

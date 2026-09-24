@@ -278,6 +278,22 @@ walkthrough, see [Use a credential source on the local OpenShell profile](../gui
 The real Sandbox Driver case is the Agent-level proof for the ordinary
 plugin-free dedicated Codex workflow.
 
+## Conditional workload tags
+
+The [conditional Sandbox example](../../examples/agent-workload-tags.ts) has two
+conformance paths:
+
+- [`agent-workload-tags.test.mjs`](../../tests/conformance/agent-workload-tags.test.mjs)
+  uses real OCC admission and direct OpenShell provider-contract calls to
+  inspect distinct policies through fixture transport.
+- [`kubernetes-compute.test.mjs`](../../tests/conformance/kubernetes-compute.test.mjs)
+  exercises tag propagation through Kubernetes Compute dispatch and fail-closed
+  rejection of unsupported projected Agent identity requirements.
+
+These tests do not establish a successful live Compute-to-OpenShell deployment. That proof requires the existing integration's credential bridge
+and an explicitly selected disposable cluster, following the
+[OpenShell Sandbox setup](#openshell-sandbox).
+
 ## OpenShell test environment
 
 [`sandbox-driver-openshell-k3d-real.test.mjs`](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs)

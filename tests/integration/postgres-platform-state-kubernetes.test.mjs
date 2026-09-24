@@ -307,6 +307,7 @@ test(
     assert.equal(persistedRevision.rows[0].revision_id, revision.id);
     assert.equal(Number(persistedRevision.rows[0].revision_number), 1);
     assert.deepEqual(persistedRevision.rows[0].admitted_spec, {
+      tags: {},
       configuration_id: revision.configurationId,
       configuration_kind: revision.configurationKind,
       configuration_generation: revision.configurationGeneration,
@@ -668,7 +669,9 @@ test(
       "id",
       "namespaceId",
       "revision",
+      "tags",
     ]);
+    assert.deepEqual(firstRevision.tags, {});
     assert.equal(firstRevision.namespaceId, namespaceA);
     assert.equal(firstRevision.agentId, primary.id);
     assert.equal(firstRevision.revision, 1);
@@ -779,6 +782,7 @@ test(
     );
     assert.equal(persistedRevisions.rowCount, 2);
     assert.deepEqual(persistedRevisions.rows[0].admitted_spec, {
+      tags: {},
       configuration_id: firstRevision.configurationId,
       configuration_kind: firstRevision.configurationKind,
       configuration_generation: firstRevision.configurationGeneration,
@@ -792,6 +796,7 @@ test(
       compute: firstRevision.compute,
     });
     assert.deepEqual(persistedRevisions.rows[1].admitted_spec, {
+      tags: {},
       configuration_id: secondRevision.configurationId,
       configuration_kind: secondRevision.configurationKind,
       configuration_generation: secondRevision.configurationGeneration,

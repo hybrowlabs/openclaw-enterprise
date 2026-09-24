@@ -96,6 +96,9 @@
   },
   "files": [
     {
+      "path": "tests/conformance/agent-workload-tags.test.mjs"
+    },
+    {
       "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
     },
     {
