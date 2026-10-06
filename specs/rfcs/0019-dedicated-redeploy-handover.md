@@ -1,10 +1,12 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 ---
 
 # Proposal: Check a dedicated replacement before stopping its predecessor
 
-- **ID:** RFC-0058
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal). Compute and worker review: Kubernetes Compute maintainers.
 - **Created:** 2026-10-03
 - **Last updated:** 2026-10-03
