@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 status_note: "Needs human review before landing. The accompanying draft implements Option B only."
 ---
 
 # Proposal: Repository options when no repository Driver is configured
 
-- **ID:** RFC-0049
+- **ID:** RFC-0019
 - **Owner:** Controller HTTP API and Console Agent creation. Review: API contract owners.
 - **Created:** 2026-10-02
 - **Last updated:** 2026-10-02
