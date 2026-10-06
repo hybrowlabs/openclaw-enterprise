@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { request } from "node:http";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
@@ -11,7 +10,10 @@ import {
 } from "../fixtures/repository-credentials/builders.mjs";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
-import { startCredentialServiceFixture } from "../fixtures/repository-credentials/service.mjs";
+import {
+  controlRequest,
+  startCredentialServiceFixture,
+} from "../fixtures/repository-credentials/service.mjs";
 import { resolveGitHubRepositoryBinding } from "../../apps/controller/src/drivers/repo/github/credentials/registry.ts";
 import {
   createGitHubDriverFactory,
@@ -20,38 +22,8 @@ import {
 import { validateServiceConfig } from "../../apps/controller/src/drivers/repo/credentials/configuration.ts";
 import { createCredentialService } from "../../apps/controller/src/drivers/repo/credentials/service.ts";
 
-function control(socketPath, path, payload, headers = {}) {
-  const body = Buffer.from(JSON.stringify(payload));
-  return new Promise((resolve, reject) => {
-    const outgoing = request(
-      {
-        socketPath,
-        method: "POST",
-        path,
-        agent: false,
-        headers: {
-          host: "localhost",
-          "content-type": "application/json",
-          "content-length": body.length,
-          ...headers,
-        },
-      },
-      (incoming) => {
-        const chunks = [];
-        incoming.on("data", (chunk) => chunks.push(chunk));
-        incoming.on("error", reject);
-        incoming.on("end", () =>
-          resolve({ status: incoming.statusCode, body: JSON.parse(Buffer.concat(chunks)) }),
-        );
-      },
-    );
-    outgoing.on("error", reject);
-    outgoing.end(body);
-  });
-}
-
 function descriptions(socketPath, payload) {
-  return control(socketPath, "/v1/repository-descriptions", payload);
+  return controlRequest(socketPath, "POST", "/v1/repository-descriptions", payload);
 }
 
 async function waitForRevocation(github) {
@@ -62,6 +34,30 @@ async function waitForRevocation(github) {
     }
     await delay(10);
   }
+}
+
+// Each lookup retires its token through a short-lived service whose shutdown
+// grace runs on the fixture clock. The provider marks the token revoked before
+// that service reads the reply, so advance the clock only after the shutdown has
+// cancelled its grace timer; an earlier jump expires the grace and blocks lookups.
+// No other timer on that clock outlives a lookup, so none pending means it finished.
+async function waitForRetiredLookup(github, clock) {
+  await waitForRevocation(github);
+  const deadline = Date.now() + 5000;
+  while (clock.pendingTimers() !== 0) {
+    if (Date.now() >= deadline) {
+      throw new Error("metadata lookup shutdown did not finish");
+    }
+    await delay(10);
+  }
+}
+
+function within(promise, message) {
+  let timer;
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), 5000);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 async function settled(socketPath, payload) {
@@ -89,7 +85,7 @@ test("private metadata sessions reject other methods and routes before issuing a
   const factory = createGitHubDriverFactory({
     configuration: githubConfigurationData(),
     metadataOnly: true,
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,
@@ -179,8 +175,7 @@ test("protected metadata lookup restricts scope, caches descriptions, and retire
   await settled(socket, payload);
   assert.equal(fixture.byRef.get("repo-a").github.issuesOfTokens.length, 1);
   const github = fixture.byRef.get("repo-a").github;
-  await waitForRevocation(github);
-  await delay(50);
+  await waitForRetiredLookup(github, fixture.clock);
   // A provider access change must stop being masked by this display cache after five minutes.
   await fixture.clock.advance(5 * 60_000 + 1);
   const refresh = await descriptions(socket, payload);
@@ -215,6 +210,8 @@ test("shutdown cancels an active metadata read and retires its issued token", as
   const gate = new Promise((resolve) => {
     release = resolve;
   });
+  const readStarted = Promise.withResolvers();
+  const readClosed = Promise.withResolvers();
   const fixture = await startRegistryCredentialServiceFixture(t, {
     autoOpen: false,
     gateway: { listen: "127.0.0.1:0" },
@@ -224,7 +221,11 @@ test("shutdown cancels an active metadata read and retires its issued token", as
         repository: "fixture/repository",
         repositoryId: "73",
         description: "Slow metadata",
-        beforeMetadataResponse: () => gate,
+        beforeMetadataResponse: ({ response }) => {
+          response.once("close", readClosed.resolve);
+          readStarted.resolve();
+          return gate;
+        },
       },
     ],
   });
@@ -234,22 +235,16 @@ test("shutdown cancels an active metadata read and retires its issued token", as
   });
   assert.equal(initial.body.pending, true);
   const github = fixture.byRef.get("repo-a").github;
-  const deadline = Date.now() + 5000;
-  while (
-    !github.trace.some(
-      (entry) => entry.method === "GET" && entry.target === "/repos/fixture/repository",
-    )
-  ) {
-    if (Date.now() >= deadline) {
-      throw new Error("metadata read did not start");
-    }
-    await delay(20);
-  }
+  await within(readStarted.promise, "metadata read did not start");
   // The caller can disappear while the provider has already issued a token.
-  // Closing the owning service must abort the read and revoke that token.
+  // Closing the owning service must abort the read and revoke that token. The
+  // provider still holds its reply, so only that abort can close the read.
   const closing = fixture.close();
-  await delay(20);
-  release();
+  try {
+    await within(readClosed.promise, "shutdown did not abort the metadata read");
+  } finally {
+    release();
+  }
   await closing;
   assert.equal(github.tokenState()[0].revoked, true);
 });
@@ -282,8 +277,7 @@ test("missing and temporarily unavailable descriptions do not block selection", 
   assert.equal(github.issuesOfTokens.length, 1);
   await settled(socket, payload);
   assert.equal(github.issuesOfTokens.length, 1);
-  await waitForRevocation(github);
-  await delay(50);
+  await waitForRetiredLookup(github, fixture.clock);
   // Transient errors enter a bounded cooldown; a later request can recover.
   await fixture.clock.advance(60_001);
   const retried = await settled(socket, payload);
@@ -297,20 +291,25 @@ test("ordinary registry and standalone session admission reject the private meta
     autoOpen: false,
     gateway: { listen: "127.0.0.1:0" },
   });
-  assert.throws(() =>
-    resolveGitHubRepositoryBinding(registry.registry, {
-      namespaceId: registry.namespaceId,
-      repositoryRef: "repo-a",
-      profile: "metadata-read",
-    }),
+  // The registry's profile set excludes the private metadata profile outright, before any
+  // Namespace policy lookup.
+  assert.throws(
+    () =>
+      resolveGitHubRepositoryBinding(registry.registry, {
+        namespaceId: registry.namespaceId,
+        repositoryRef: "repo-a",
+        profile: "metadata-read",
+      }),
+    /invalid-repository-registry/,
   );
   const binding = resolveGitHubRepositoryBinding(registry.registry, {
     namespaceId: registry.namespaceId,
     repositoryRef: "repo-a",
     profile: "git-read",
   });
-  const result = await control(
+  const result = await controlRequest(
     registry.config.gateway.controlSocket,
+    "POST",
     "/v1/sessions",
     {
       namespaceId: registry.namespaceId,
@@ -328,8 +327,9 @@ test("ordinary registry and standalone session admission reject the private meta
 
   const standalone = await startCredentialServiceFixture(t, { gateway: { listen: "127.0.0.1:0" } });
   assert.throws(() => standalone.factory.resolve("metadata-read"), /unsupported-profile/);
-  const standaloneResult = await control(
+  const standaloneResult = await controlRequest(
     standalone.config.gateway.controlSocket,
+    "POST",
     "/v1/sessions",
     {
       profile: "metadata-read",
