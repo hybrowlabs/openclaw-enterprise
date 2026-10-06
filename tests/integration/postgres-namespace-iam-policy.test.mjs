@@ -547,10 +547,26 @@ test(
       createState.transact((unit) =>
         iam.createNamespaceAccessBinding(
           { policy: unit.iamPolicy },
-          { ...agentBinding, id: identifier("binding") },
+          { ...agentBinding, id: identifier("binding"), subjectId: principal.id },
         ),
       ),
       /target does not exist in this Namespace or is being deleted/,
+    );
+    // Deletion also removes bindings for the Agent's ServicePrincipal, so a deleting
+    // Agent's ServicePrincipal is no longer a bindable subject for any target.
+    await assert.rejects(
+      createState.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          {
+            ...agentBinding,
+            id: identifier("binding"),
+            resourceKind: "secret",
+            resourceId: secret.id,
+          },
+        ),
+      ),
+      /the ServicePrincipal of a live Agent here/,
     );
 
     assert.equal(

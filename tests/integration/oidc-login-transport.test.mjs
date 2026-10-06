@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createServer } from "node:http";
 import test from "node:test";
 import { humanLoginConfiguration } from "../../apps/controller/src/auth/index.ts";
 import { oidcLoginConfiguration, oidcNonce } from "../../apps/controller/src/auth/oidc.ts";
@@ -13,7 +12,9 @@ import {
   loginSecret as secret,
   redirectProviderFetch,
   startProviderServer,
+  testOversizedProviderBodies,
 } from "../helpers/human-login-transport.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
 const subject = "auth0|65f0c1d2e3a4b5c6d7e8f901";
 const environment = {
@@ -136,7 +137,8 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     const before = requests.length;
     await expectDenied(await fixture.callback(`state=${callbackState}&code=${"c".repeat(4097)}`));
     assert.equal(requests.length, before);
-    assert.deepEqual(fixture.denials, [["INVALID_ATTEMPT", "oidc"]]);
+    assert.deepEqual(fixture.denials, []);
+    assert.deepEqual(fixture.unmatched, ["oidc"]);
   });
 
   await t.test("tokens for another issuer, client or nonce are rejected", async () => {
@@ -166,6 +168,18 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     assert.deepEqual(fixture.operationalLogs(), [
       unavailableLog({ step: "token", cause: "redirect" }),
     ]);
+  });
+
+  await testOversizedProviderBodies(t, {
+    endpoints: [
+      ["/oauth/token", "token"],
+      ["/.well-known/jwks.json", "jwks"],
+    ],
+    serve: (handler) => {
+      serve = handler;
+    },
+    provider,
+    login: loginFixture,
   });
 
   await t.test("an unavailable JWKS logs one warning with the HTTP status", async () => {
@@ -204,6 +218,31 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     serve = (_request, response) => {
       response.writeHead(400, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "invalid_grant" }));
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["EXTERNAL_IDENTITY_REJECTED", "oidc"]]);
+    assert.deepEqual(fixture.operationalLogs(), []);
+  });
+
+  await t.test("a refused client secret logs one warning instead of a rejection", async () => {
+    const fixture = loginFixture();
+    serve = (_request, response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "invalid_client", error_description: "fixture-code" }));
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+    assert.deepEqual(fixture.operationalLogs(), [
+      unavailableLog({ step: "token", cause: "client_rejected" }),
+    ]);
+    assertNoSecrets(fixture.operationalLogs());
+  });
+
+  await t.test("an unreadable 4xx token answer stays a rejection without a warning", async () => {
+    const fixture = loginFixture();
+    serve = (_request, response) => {
+      response.writeHead(401, { "content-type": "text/html" });
+      response.end("<html>invalid_client</html>");
     };
     await expectDenied(await fixture.callback());
     assert.deepEqual(fixture.denials, [["EXTERNAL_IDENTITY_REJECTED", "oidc"]]);
@@ -255,10 +294,7 @@ function assertNoSecrets(lines) {
 
 test("an unreachable OIDC token endpoint logs connect_refused with its code", async (t) => {
   // A port that was just released refuses connections.
-  const closed = createServer();
-  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
-  const { port } = closed.address();
-  await new Promise((resolve) => closed.close(resolve));
+  const port = await availablePort();
   redirectProviderFetch(t, pinned, `http://127.0.0.1:${port}`);
   const fixture = loginFixture();
   await expectDenied(await fixture.callback());
