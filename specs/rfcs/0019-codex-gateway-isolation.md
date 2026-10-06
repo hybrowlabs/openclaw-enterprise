@@ -1,17 +1,19 @@
 ---
 status: Proposed
+implementation_status: Partially implemented
+author: freeqaz
 status_note: "Retroactive record. #808, #814 and #824 landed on 2026-10-01 and implement the decision below; #830 is open and held for a human decision. Recorded as Proposed until reviewers accept or revise the landed design."
 ---
 
 # Proposal: Keep dedicated Codex Gateways from acting on their own Pod
 
-- **ID:** RFC-0046
+- **ID:** RFC-0019
 - **Owner:** freeqaz (implementation PRs). Decision review: maintainers of the Kubernetes Compute Driver and the Harness runtime.
 - **Created:** 2026-10-01
 - **Last updated:** 2026-10-03
 - **RFC PR:** [#853](https://github.com/openclaw/openclaw-enterprise/pull/853)
 - **Implementation:** landed [#808][pr-808], [#814][pr-814], [#824][pr-824]; open [#830][pr-830]. Follow-ups: [#874][pr-874], [#895][pr-895], [#896][pr-896]. Related Harness hardening: [#765][pr-765], [#796][pr-796].
-- **Related:** [Gateway–Harness storage split](28-gateway-harness-storage-split.md), [Harness authentication bindings](30-harness-auth-binding.md), [Dedicated Harness RWO workspace plan](../plans/38-harness-rwo-workspace-plan.md), [Workspace files flow](../../docs/flows/workspace-files.md).
+- **Related:** [Gateway–Harness storage split](0003-gateway-harness-storage-split.md), [Harness authentication bindings](0005-harness-auth-binding.md), [Dedicated Harness RWO workspace plan](../plans/38-harness-rwo-workspace-plan.md), [Workspace files flow](../../docs/flows/workspace-files.md).
 - **Source baseline:** `main` at `04d01d02e`; OpenClaw runtime pin `9d9c8568c` (`deploy/runtime/Dockerfile`).
 
 <a id="problem-and-decision"></a>
@@ -205,7 +207,7 @@ The `openai` default-transport case was not run live.
 ## Alternatives considered
 
 - **Mount the Harness workspace in the Gateway.** Rejected by the storage split
-  (RFC 28): the workspace is RWO on the Harness, and Gateway tools would still
+  (RFC-0003): the workspace is RWO on the Harness, and Gateway tools would still
   run with Gateway credentials and network.
 - **Route the tools through the node.** OpenClaw runs these tools in the
   Gateway process; rerouting each one would be upstream work. Codex's native
