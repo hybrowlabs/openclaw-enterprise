@@ -90,8 +90,8 @@ Driver before removing its own record.
 For plugin discovery, OCC checks permissions and reads current Secret metadata,
 then calls `withValue` without holding a platform transaction over backend or
 provider I/O. The callback passes the value to the selected PluginDriver and
-does not persist it. Saved-Agent discovery rechecks grants and the binding
-inside the callback before that PluginDriver call. A Driver without this optional
+does not persist it. Discovery rechecks the caller's grants inside the callback
+before that PluginDriver call; saved-Agent discovery also rechecks the binding. A Driver without this optional
 capability cannot serve Secret-backed discovery. Each request reads the current
 backend value; a concurrent rotation can take effect after an in-flight request
 has already read the prior value. See
@@ -110,8 +110,8 @@ model API keys go only to the Harness that executes the model.
 - No public value reads, version history, rollback, credential issuance, or general
   per-access broker. Environment projection is the supported workload delivery
   mechanism; plugin discovery uses the transient server-side callback.
-- Updating a Secret does not restart workloads. Redeploy or restart consumers
-  before expecting a new value to appear in their environment.
+- Updating a Secret does not restart workloads. Redeploy consumers through OCE
+  to refresh revision projections before expecting a new environment value.
 - Kubernetes is the only selectable implementation. Arbitrary installed Secret
   packages and SSH delivery are unsupported; selection alone does not enable them.
 

@@ -17,10 +17,10 @@ import {
   seedBackendBinding,
   serviceAccountDriverId,
   startBackendlessDevelopmentServer,
-  stopProcess,
   workspaceId,
 } from "../helpers/postgres-backend-state.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
+import { stopProcess } from "../helpers/stop-process.mjs";
 import { waitFor } from "../helpers/wait-for.mjs";
 
 async function request(origin, session, method, path, body) {
@@ -86,7 +86,8 @@ async function expectBackendConflict(operation, pattern) {
   await assert.rejects(
     operation,
     (error) =>
-      error?.name === "ResourceConflictError" &&
+      // A Harness authentication refusal at deploy names itself after authorization.
+      (error?.name === "ResourceConflictError" || error?.name === "ResourceStateConflictError") &&
       (pattern === undefined || pattern.test(error.message)),
   );
 }

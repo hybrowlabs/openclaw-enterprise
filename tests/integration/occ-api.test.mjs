@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
@@ -21,6 +23,7 @@ import {
   AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   ConfigurationHarnessError,
+  DependencyUnavailableError,
   InMemoryPlatformState,
   OpenClawController,
 } from "../../packages/occ/src/index.ts";
@@ -32,12 +35,13 @@ import {
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
+import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { availablePort } from "../helpers/available-port.mjs";
+import { stopProcess } from "../helpers/stop-process.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
-const developmentEmail = "admin@openclaw.local";
-const developmentPassword = "openclaw-development-password";
 const uuidV4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const identifier = (prefix) => new RegExp(`^${prefix}_${uuidV4}$`);
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
@@ -51,8 +55,6 @@ function childEnvironment(port, overrides = {}) {
     OCC_PORT: String(port),
     OCC_AUTH_BASE_URL: `http://127.0.0.1:${port}`,
     OCC_AUTH_SECRET: "openclaw-development-auth-secret-minimum-32-bytes",
-    OPENCLAW_DEV_EMAIL: developmentEmail,
-    OPENCLAW_DEV_PASSWORD: developmentPassword,
     ...overrides,
   };
 
@@ -84,42 +86,36 @@ function startChild(port, overrides = {}) {
   return { child, output: () => output };
 }
 
-async function stopChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  const exited = once(child, "exit");
-  child.kill("SIGTERM");
-  const forced = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 1_000);
-  forced.unref();
-
-  try {
-    await exited;
-  } finally {
-    clearTimeout(forced);
-  }
-}
-
+// Each case points OCC_DATABASE_URL at a closed port, so a case whose own check stopped
+// firing would still exit nonzero once startup tried the database (PERSISTENCE_UNAVAILABLE).
+// The startup-error code proves startup refused it before that. STARTUP_FAILED is the
+// catch-all code, so the bind and production cases prove only that much.
 async function assertUnsafeStartupRejected() {
   const configuredDatabase = { OCC_DATABASE_URL: "postgresql://127.0.0.1:1/openclaw" };
-  for (const [description, overrides] of [
-    ["missing development database", {}],
-    ["production mode", { ...configuredDatabase, NODE_ENV: "production", OCC_HOST: "192.0.2.10" }],
-    ["nonloopback bind", { ...configuredDatabase, OCC_HOST: "192.0.2.10" }],
-    ["unsafe container bind", { ...configuredDatabase, OCC_HOST: "0.0.0.0" }],
-    ["low-entropy auth secret", { ...configuredDatabase, OCC_AUTH_SECRET: "insecure" }],
-    ["invalid auth base URL", { ...configuredDatabase, OCC_AUTH_BASE_URL: "not-a-url" }],
+  for (const [description, overrides, code] of [
+    ["missing development database", {}, "DATABASE_CONFIGURATION_INVALID"],
+    [
+      "production mode",
+      { ...configuredDatabase, NODE_ENV: "production", OCC_HOST: "192.0.2.10" },
+      "STARTUP_FAILED",
+    ],
+    ["nonloopback bind", { ...configuredDatabase, OCC_HOST: "192.0.2.10" }, "STARTUP_FAILED"],
+    ["unsafe container bind", { ...configuredDatabase, OCC_HOST: "0.0.0.0" }, "STARTUP_FAILED"],
+    [
+      "low-entropy auth secret",
+      { ...configuredDatabase, OCC_AUTH_SECRET: "insecure" },
+      "AUTH_SECRET_INVALID",
+    ],
+    [
+      "invalid auth base URL",
+      { ...configuredDatabase, OCC_AUTH_BASE_URL: "not-a-url" },
+      "AUTH_BASE_URL_INVALID",
+    ],
     [
       "nonloopback auth base URL",
       { ...configuredDatabase, OCC_AUTH_BASE_URL: "http://192.0.2.10:3000" },
+      "AUTH_BASE_URL_INVALID",
     ],
-    ["missing development email", { ...configuredDatabase, OPENCLAW_DEV_EMAIL: "" }],
-    ["missing development password", { ...configuredDatabase, OPENCLAW_DEV_PASSWORD: "" }],
   ]) {
     const port = await availablePort();
     const processState = startChild(port, overrides);
@@ -137,9 +133,10 @@ async function assertUnsafeStartupRejected() {
       ]);
       const [exitCode] = result;
       assert.notEqual(exitCode, 0, `${description} must fail closed:\n${processState.output()}`);
+      assert.match(processState.output(), new RegExp(`"code":"${code}"`), description);
     } finally {
       clearTimeout(deadline);
-      await stopChild(processState.child);
+      await stopProcess(processState.child, { graceMs: 1_000 });
     }
   }
 }
@@ -554,6 +551,7 @@ async function createInjectedFixture(options = {}) {
         installationId,
       },
       auth: authFixture.auth,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.provisionAuthAccount === undefined
         ? {}
         : {
@@ -750,6 +748,13 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   assert.equal(stopped.status, 202);
   assert.equal(stopped.data.desiredRuntimeState, "stopped");
   assert.equal(stopped.data.id, agent.id);
+  const stopAudit = controller.fixture.auditSink.events.findLast(
+    (event) => event.action === "openclaw.agents.stop",
+  );
+  assert.deepEqual(
+    [stopAudit?.kind, stopAudit?.outcome, stopAudit?.resource.id],
+    ["mutation", "success", agent.id],
+  );
 
   const deployment = await controller.request(
     "POST",
@@ -1172,6 +1177,17 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     );
   }
 
+  // A long list of create Permissions is shortened so the guidance still fits the cap.
+  const manyCreates = await createRole(
+    ["agent", "configuration", "credential_source", "preset", "secret", "service_account"].map(
+      (resourceKind) => ({ action: "create", resourceKind }),
+    ),
+  );
+  const long = await bind(manyCreates, "namespace", namespace.id);
+  assert.equal(long.status, 400, JSON.stringify(long.body));
+  assert.ok(Array.from(long.body.error.message).length <= 256, long.body.error.message);
+  assert.match(long.body.error.message, / and \d+ more\. .*remove them from the Role\.$/);
+
   // A Role with no Permission for the target's kind would grant nothing there.
   const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
   const nothing = await bind(agentReader, "namespace", namespace.id);
@@ -1252,7 +1268,8 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
   });
   assert.equal(secret.status, 201, JSON.stringify(secret.body));
 
-  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  // The request schema admits these strings; every API route refuses them before validation
+  // because they are not UTF-8 (OCC's own Secret value check would refuse them too).
   for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
     for (const [method, path, body] of [
       ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
@@ -1261,7 +1278,10 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
       const rejected = await controller.request(method, path, { body });
       assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
       assert.equal(rejected.body.error.code, "INVALID_REQUEST");
-      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.equal(
+        rejected.body.error.message,
+        "The request does not match the operation contract: body /value contains an unpaired UTF-16 surrogate.",
+      );
       assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
     }
   }
@@ -1577,6 +1597,20 @@ test("Namespace IAM reports invalid policy input as 400 with the field and refus
       new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
     );
   }
+  // A Role naming many of them gets a message within the 256-character error contract.
+  const kinds = ["agent_revision", "configuration", "credential_source", "preset", "secret"];
+  const actions = ["administer", "create", "delete", "deploy", "operate", "read_logs", "update"];
+  const many = await createRole(
+    namespace.id,
+    kinds.flatMap((resourceKind) => actions.map((action) => ({ action, resourceKind }))),
+  );
+  assert.equal(many.status, 400, JSON.stringify(many.body));
+  assert.deepEqual(many.body.error.details, [{ path: "/permissions", code: "INVALID_VALUE" }]);
+  assert.ok(Array.from(many.body.error.message).length <= 256, many.body.error.message);
+  assert.match(
+    many.body.error.message,
+    /^No operation checks these Permissions, so they would grant nothing: agent_revision:administer, .* and \d+ more\. See the per-kind actions in the permissions reference\.$/,
+  );
   const duplicate = await createRole(namespace.id, [
     { action: "read", resourceKind: "agent" },
     { action: "read", resourceKind: "agent" },
@@ -2237,6 +2271,90 @@ test("Agent Backend API preserves nullable drafts and immutable revision associa
   assert.equal(replaced.data.backendId, "openai");
 });
 
+test("Installation Backend IDs and Agent backendId share the API schema's character rule", async () => {
+  // 200 code points (395 UTF-16 units) with interior whitespace: the API schema accepts it,
+  // so OCC must accept it as configuration and the state store must save it.
+  const id = `open\u00a0${"😀".repeat(195)}`;
+  const fixture = await createInjectedFixture({
+    backends: [
+      {
+        id,
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "11111111-1111-4111-8111-111111111111",
+          apiKeyPath: "/unused-in-api-contract-test",
+        },
+        drivers: { service_account: "chatgpt-service-accounts" },
+      },
+    ],
+    backendSummaries: [{ id, type: "chatgpt" }],
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "backend-id-rule");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const collection = `/namespaces/${namespace.id}/agents`;
+
+  const created = await controller.request("POST", collection, {
+    body: { name: "long-backend-id", configurationId: configuration.id, backendId: id },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.data.backendId, id);
+
+  // 201 code points; DEL and C1 controls (PostgreSQL's [[:cntrl:]] refuses both); line and
+  // paragraph separators.
+  for (const backendId of [
+    "😀".repeat(201),
+    "open\u007fai",
+    "open\u0085ai",
+    "open\u2028ai",
+    "open\u2029ai",
+  ]) {
+    const invalid = await controller.request("POST", collection, {
+      body: { name: "invalid-backend-id", configurationId: configuration.id, backendId },
+    });
+    assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
+    assert.equal(invalid.body.error.code, "INVALID_REQUEST");
+  }
+});
+
+test("Names follow the Backend ID text rule, so C1 controls are refused", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  // 200 code points (400 UTF-16 units) with an interior NBSP is a valid Name.
+  const namespace = await createNamespace(controller, `name\u00a0${"😀".repeat(195)}`);
+  const configuration = await createConfiguration(controller, namespace.id);
+
+  // C0, DEL and C1 controls (PostgreSQL's [[:cntrl:]] name checks refuse all three),
+  // line and paragraph separators, edge whitespace, and 201 code points.
+  for (const name of [
+    "name\u0000x",
+    "name\u007fx",
+    "name\u0080x",
+    "name\u0085x",
+    "name\u009fx",
+    "name\u2028x",
+    "name\u2029x",
+    " name",
+    "name\u00a0",
+    "😀".repeat(201),
+  ]) {
+    const refusedNamespace = await controller.request("POST", "/namespaces", { body: { name } });
+    assert.equal(refusedNamespace.status, 400, JSON.stringify(refusedNamespace.body));
+    assert.equal(refusedNamespace.body.error.code, "INVALID_REQUEST");
+    const refusedAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: { name, configurationId: configuration.id },
+    });
+    assert.equal(refusedAgent.status, 400, JSON.stringify(refusedAgent.body));
+    assert.equal(refusedAgent.body.error.code, "INVALID_REQUEST");
+  }
+});
+
 test("Installation API exposes Agent provisioning capabilities without configured Backends", async () => {
   let ensureNamespaceCalls;
   let deleteNamespaceCalls;
@@ -2530,8 +2648,16 @@ test("Installation deployment inventory fails closed on incomplete authorization
     },
   );
 
-  // A complete fleet response must not turn any exact-resource denial into omission.
+  // The inventory needs Installation administer, and a complete fleet response must not turn
+  // any exact-resource denial into omission.
   for (const restriction of [
+    {
+      id: "deny-inventory-installation-administer",
+      resourceKind: "installation",
+      resourceId: fixture.installationId,
+      action: "administer",
+      effect: "deny",
+    },
     {
       id: "deny-inventory-namespace-read",
       namespaceId: namespace.id,
@@ -2664,6 +2790,31 @@ test("Channel directory lookup checks the exact edit target and Secret before an
     body: { ...body, ids: ["U123"] },
   });
   assert.equal(mixed.status, 400);
+  // The body is a union of lookup and hydration shapes. A lookup whose query is too long
+  // names only that field, not the fields other shapes require, and only the lookup shape
+  // fits, so the message names its bound.
+  const longQuery = await controller.request("POST", path, {
+    body: { ...body, query: "q".repeat(201) },
+  });
+  assert.equal(longQuery.status, 400);
+  assert.equal(
+    longQuery.body.error.message,
+    "The request does not match the operation contract: body /query is too long (expected at most 200 characters).",
+  );
+  assert.deepEqual(longQuery.body.error.details, [{ path: "/query", code: "TOO_LONG" }]);
+  // An unknown kind fits no shape, so every shape's problem stays, but the three hydration
+  // shapes' identical missing /ids is listed once.
+  const unknownKind = await controller.request("POST", path, {
+    body: { ...body, kind: "groups" },
+  });
+  assert.equal(unknownKind.status, 400);
+  assert.deepEqual(unknownKind.body.error.details, [
+    { path: "/kind", code: "INVALID_VALUE" },
+    { path: "/agentId", code: "REQUIRED" },
+    { path: "/configurationId", code: "REQUIRED" },
+    { path: "/ids", code: "REQUIRED" },
+    { path: "", code: "INVALID_VALUE" },
+  ]);
   assert.deepEqual(
     (
       await controller.request("POST", path, {
@@ -3162,6 +3313,23 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
       assert.equal(response.body.error.message, message);
     }
   }
+  // A plugin the selected Driver does not offer, as after an Installation switches Drivers:
+  // the refusal names the rejected ID and points at its selection.
+  const otherDriverUpdate = await controller.request("PATCH", agentPath, {
+    body: {
+      configurationId: configuration.id,
+      plugins: { [diffsPluginId]: pluginPolicy(), [linearPluginId]: pluginPolicy() },
+    },
+  });
+  assert.equal(otherDriverUpdate.status, 400);
+  assert.equal(otherDriverUpdate.body.error.code, "INVALID_REQUEST");
+  assert.match(
+    otherDriverUpdate.body.error.message,
+    /^A plugin selection names a plugin that the selected Plugin Driver \(occ-plugin\) does not offer: codex-plugin:linear@openai-curated-remote\./,
+  );
+  assert.deepEqual(otherDriverUpdate.body.error.details, [
+    { path: `/plugins/${linearPluginId}`, code: "INVALID_VALUE" },
+  ]);
   const afterUnsupported = await controller.request("GET", agentPath);
   assert.deepEqual(afterUnsupported.data, afterInvalidUpdate.data);
   const savedAgents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
@@ -3254,6 +3422,36 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   assert.equal(failedAudit.body.error.code, "DEPENDENCY_UNAVAILABLE");
   const afterAuditFailure = await controller.request("GET", agentPath);
   assert.deepEqual(afterAuditFailure.data, beforeAuditFailure.data);
+
+  // After the Installation switches Plugin Drivers, the Agent's stored selection is refused
+  // where the plugins are read from storage: an update that omits plugins and a bodiless
+  // deploy. The message still names the plugin, but no detail points into a request body
+  // the caller never sent.
+  await controller.fixture.controller.handleNamespaceLifecycle(
+    controller.fixture.principal.id,
+    namespace.id,
+    "ready",
+  );
+  await bindHarnessKey(controller.fixture, namespace.id, agent.data);
+  const beforeDriverSwitch = await controller.request("GET", agentPath);
+  const codexPluginDriver = new CodexPluginDriver();
+  controller.fixture.controller.registerDriver(codexPluginDriver);
+  controller.fixture.controller.selectDriver("plugin", codexPluginDriver.id);
+  const storedUpdate = await controller.request("PATCH", agentPath, {
+    body: { configurationId: configuration.id },
+  });
+  const storedDeploy = await controller.request("POST", `${agentPath}/deploy`);
+  for (const response of [storedUpdate, storedDeploy]) {
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, "INVALID_REQUEST");
+    assert.match(
+      response.body.error.message,
+      /^A plugin selection names a plugin that the selected Plugin Driver \(codex-plugin\) does not offer: occ-plugin:diffs\./,
+    );
+    assert.equal(Object.hasOwn(response.body.error, "details"), false);
+  }
+  const afterStoredRefusal = await controller.request("GET", agentPath);
+  assert.deepEqual(afterStoredRefusal.data, beforeDriverSwitch.data);
 });
 
 test("native ServiceAccounts keep private credential references and cannot admit Harness authentication", async () => {
@@ -3866,6 +4064,7 @@ test("administrator-created auth accounts sign in and receive only provisioned I
       email: namespaceRoleEmail,
       password: namespaceRolePassword,
     }),
+    /sign-in failed with HTTP 401: .*"code":\s*"UNAUTHENTICATED"/s,
   );
 
   // An explicit but blank or null roleId is a malformed request, never the zero-grant path.
@@ -4246,7 +4445,8 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
   assert.equal(agent.status, 201, JSON.stringify(agent.body));
   const agentPath = `/namespaces/${namespaceId}/agents/${agent.data.id}`;
 
-  const reserved = "A secret binding uses a reserved or invalid environment destination.";
+  const reserved =
+    "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.";
   const crossNamespace = "Secret references cannot cross Namespaces.";
   const writes = [
     [
@@ -4283,6 +4483,13 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
       assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
       if (message !== undefined) {
         assert.equal(result.body.error.message, message, label);
+      }
+      if (message === reserved) {
+        assert.deepEqual(
+          result.body.error.details,
+          [{ path: "/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" }],
+          label,
+        );
       }
     }
   }
@@ -4323,6 +4530,58 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
         assert.equal(result.body.error.message, message, label);
       }
     }
+    // The method selects the api_key shape: only its missing source is reported. An unknown
+    // method selects no shape, so every shape's problem stays.
+    const withoutSource = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "api_key" }),
+    });
+    assert.equal(withoutSource.status, 400, `${path}: ${JSON.stringify(withoutSource.body)}`);
+    assert.equal(
+      withoutSource.body.error.message,
+      "The request does not match the operation contract: body /harnessAuth/source is required.",
+      path,
+    );
+    assert.deepEqual(
+      withoutSource.body.error.details,
+      [{ path: "/harnessAuth/source", code: "REQUIRED" }],
+      path,
+    );
+    // Switching to the runtime method while leaving the old source in place: the method
+    // selects the runtime shape, so only the field it does not accept is reported.
+    const runtimeWithSource = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "runtime", source: foreign }),
+    });
+    assert.equal(
+      runtimeWithSource.status,
+      400,
+      `${path}: ${JSON.stringify(runtimeWithSource.body)}`,
+    );
+    assert.equal(
+      runtimeWithSource.body.error.message,
+      "The request does not match the operation contract: body /harnessAuth/source is not an accepted field.",
+      path,
+    );
+    assert.deepEqual(
+      runtimeWithSource.body.error.details,
+      [{ path: "/harnessAuth/source", code: "UNKNOWN_FIELD" }],
+      path,
+    );
+    const unknownMethod = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "password" }),
+    });
+    assert.equal(unknownMethod.status, 400, `${path}: ${JSON.stringify(unknownMethod.body)}`);
+    assert.deepEqual(
+      unknownMethod.body.error.details,
+      [
+        { path: "/harnessAuth/method", code: "INVALID_VALUE" },
+        { path: "/harnessAuth/source", code: "REQUIRED" },
+        { path: "/harnessAuth/serviceAccountId", code: "REQUIRED" },
+        { path: "/harnessAuth/sourceId", code: "REQUIRED" },
+        { path: "/harnessAuth", code: "INVALID_VALUE" },
+        { path: "/harnessAuth", code: "INVALID_TYPE" },
+      ],
+      path,
+    );
   }
 
   // A resource the caller cannot find stays a not-found even when the request is invalid.
@@ -4355,9 +4614,26 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
 });
 
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
+  const computeDriver = createProvisioningCapableComputeDriver();
+  const logLines = [];
   const fixture = await createInjectedFixture({
-    computeDriver: createProvisioningCapableComputeDriver(),
+    computeDriver,
     configurationDriver: createProvisioningCapableConfigurationDriver(),
+    logger: createOccLogger({
+      component: "occ-api",
+      level: "info",
+      destination: {
+        write(chunk) {
+          logLines.push(
+            ...String(chunk)
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line)),
+          );
+          return true;
+        },
+      },
+    }),
   });
   const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
     body: { name: "Provisioning validation installation" },
@@ -4423,7 +4699,36 @@ test("Agent provisioning API validates inline configuration with existing Secret
           source: { kind: "provisioning-secret", name: "model-api-key" },
         },
       }),
-      /^The request does not match the operation contract: body \/harnessAuth\/source is not an accepted field;/,
+      "The request does not match the operation contract: body /harnessAuth/source/namespaceId is required.",
+    ],
+    [
+      // Only the source kind is wrong, so the api_key shape fits and the other Harness
+      // authentication shapes' fields are not listed.
+      "Harness Secret source of another kind",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        harnessAuth: {
+          method: "api_key",
+          source: {
+            ...exactSecretRef(namespace.data.id, secrets.modelApiKey.id),
+            kind: "provisioning-secret",
+          },
+        },
+      }),
+      'The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value (expected "secret").',
+    ],
+    [
+      // A string fits neither a Harness authentication shape nor null: one wrong-type problem
+      // names both, not one per union level.
+      "Harness authentication of the wrong type",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: "api_key" }),
+      "The request does not match the operation contract: body /harnessAuth has the wrong type (expected one of object, null).",
+    ],
+    [
+      // The method selects the api_key shape, so only its missing source is reported, not
+      // the fields of the other methods' shapes or the runtime method's literal.
+      "Harness authentication method without its source",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: { method: "api_key" } }),
+      "The request does not match the operation contract: body /harnessAuth/source is required.",
     ],
     [
       "too many binding destinations",
@@ -4460,6 +4765,18 @@ test("Agent provisioning API validates inline configuration with existing Secret
       "Secret references cannot cross Namespaces.",
     ],
     [
+      // executionMode is optional and defaults to embedded; the Compute Driver provisions only
+      // dedicated Agents, so the request is refused naming the field to set.
+      "omitted execution mode",
+      provisioningRequestBody(namespace.data.id, secrets, { executionMode: undefined }),
+      "Agent provisioning needs dedicated execution; this request uses embedded execution. Set executionMode.",
+    ],
+    [
+      "embedded execution mode",
+      provisioningRequestBody(namespace.data.id, secrets, { executionMode: "embedded" }),
+      "Agent provisioning needs dedicated execution; this request uses embedded execution. Set executionMode.",
+    ],
+    [
       "reserved environment destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: {
@@ -4470,7 +4787,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
-      "A secret binding uses a reserved or invalid environment destination.",
+      "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.",
     ],
   ];
 
@@ -4490,6 +4807,164 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+  // A plan the Kubernetes Compute Driver refuses is a conflict (its error classes are private,
+  // so it used to be a 500). A gateway setting in the caller's own Configuration is named,
+  // without its value, so the caller can fix it.
+  const kubernetes = createTestKubernetesComputeDriver("compute-provisioning-validation");
+  computeDriver.validateAgentProvisioning = (input) => kubernetes.validateAgentProvisioning(input);
+  const model = { agents: { defaults: { model: "codex/gpt-6-astra" } } };
+  for (const [gateway, message] of [
+    [
+      { auth: { mode: "token" } },
+      "Configuration setting gateway.auth.mode must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication.",
+    ],
+    [
+      { trustedProxies: ["10.99.0.0/16"] },
+      "Configuration setting gateway.trustedProxies must be omitted or match the Installation's network.gatewayTrustedProxyCidrs.",
+    ],
+  ]) {
+    const refused = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      {
+        body: provisioningRequestBody(namespace.data.id, secrets, {
+          configuration: { values: { ...model, gateway } },
+        }),
+      },
+    );
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.deepEqual(
+      { code: refused.body.error.code, message: refused.body.error.message },
+      { code: "RESOURCE_CONFLICT", message },
+    );
+    assert.doesNotMatch(JSON.stringify(refused.body), /10\.99\./);
+  }
+  // A refusal the caller cannot fix (here the Installation enables dedicated runtime storage
+  // without gateway routing) keeps fixed text, since its reason names Installation settings.
+  // The API log names it with the request ID for the operator.
+  const unrouted = createTestKubernetesComputeDriver("compute-provisioning-unrouted", {
+    repositoryCredentials: true,
+  });
+  computeDriver.validateAgentProvisioning = (input) => unrouted.validateAgentProvisioning(input);
+  const computeRefused = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  assert.equal(computeRefused.status, 409, JSON.stringify(computeRefused.body));
+  const refusals = logLines.filter((line) => line.event === "agent_provisioning.compute_refused");
+  assert.equal(refusals.length, 1, JSON.stringify(refusals));
+  assert.deepEqual(
+    {
+      severity: refusals[0].severity,
+      requestId: refusals[0].requestId,
+      reason: refusals[0].reason,
+    },
+    {
+      severity: "WARN",
+      requestId: computeRefused.body.meta.requestId,
+      reason: "Dedicated Harness storage requires gateway routing and node enrollment.",
+    },
+  );
+  assert.equal(computeRefused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    computeRefused.body.error.message,
+    "The Compute Driver cannot provision this execution mode or gateway configuration.",
+  );
+  // The refusal comes after authorization: a caller who cannot create Agents learns nothing
+  // about the Installation's Compute settings.
+  fixture.state.restrictions.push({
+    id: "deny-provisioning-agent-create",
+    namespaceId: namespace.data.id,
+    resourceKind: "agent",
+    resourceId: namespace.data.id,
+    action: "create",
+    effect: "deny",
+  });
+  const refusedUnauthorized = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  fixture.state.restrictions.pop();
+  assert.equal(refusedUnauthorized.status, 403, JSON.stringify(refusedUnauthorized.body));
+  // The logged reason keeps at most 512 characters, and a thrown non-Error's value is not logged.
+  for (const [thrown, reason] of [
+    [new Error("r".repeat(600)), "r".repeat(512)],
+    ["internal driver detail", "The Compute Driver refused the plan."],
+  ]) {
+    computeDriver.validateAgentProvisioning = () => {
+      throw thrown;
+    };
+    const logged = logLines.length;
+    const refused = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      { body: provisioningRequestBody(namespace.data.id, secrets) },
+    );
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.doesNotMatch(JSON.stringify(refused.body), /internal driver detail|r{512}/);
+    assert.deepEqual(
+      logLines
+        .slice(logged)
+        .filter((line) => line.event === "agent_provisioning.compute_refused")
+        .map((line) => ({ requestId: line.requestId, reason: line.reason })),
+      [{ requestId: refused.body.meta.requestId, reason }],
+    );
+  }
+  // A dependency the Compute Driver reports as unavailable stays retryable.
+  computeDriver.validateAgentProvisioning = () => {
+    throw new DependencyUnavailableError("The Compute Driver is unavailable.");
+  };
+  const computeUnavailable = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  computeDriver.validateAgentProvisioning = () => {};
+  assert.equal(computeUnavailable.status, 503, JSON.stringify(computeUnavailable.body));
+  assert.equal(computeUnavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const wrongTypeHarnessAuth = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      body: invalidBodies.find(([description]) =>
+        description.startsWith("Harness authentication"),
+      )[1],
+    },
+  );
+  assert.deepEqual(wrongTypeHarnessAuth.body.error.details, [
+    { path: "/harnessAuth", code: "INVALID_TYPE" },
+  ]);
+  const methodWithoutSource = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      body: invalidBodies.find(([description]) =>
+        description.startsWith("Harness authentication method"),
+      )[1],
+    },
+  );
+  assert.deepEqual(methodWithoutSource.body.error.details, [
+    { path: "/harnessAuth/source", code: "REQUIRED" },
+  ]);
+  // The reserved destination is named by its pointer under the inline Configuration.
+  const reservedProvisioning = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: invalidBodies.find(([description]) => description.startsWith("reserved"))[1] },
+  );
+  assert.deepEqual(reservedProvisioning.body.error.details, [
+    { path: "/configuration/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" },
+  ]);
 
   // A model provider baseUrl the runtime cannot use is refused at admission with the field
   // named, instead of surfacing later as an unexplained startup model check failure.
@@ -4671,6 +5146,50 @@ test("bodyless OCC routes reject request payloads before IAM or domain side effe
   }
 });
 
+test("API response serializers keep same-$id shared schemas of sibling plugins apart", async () => {
+  // The serializer cache keys shared schemas by identity: two plugins that each add a
+  // different schema under one $id, with identical route schemas, must not share a build.
+  const fixture = await createInjectedFixture();
+  const app = fixture.createApp(fixture.principal, createFastifyApp);
+  try {
+    for (const field of ["first", "second"]) {
+      app.register(async (scope) => {
+        scope.addSchema({
+          $id: "SerializerCacheSibling",
+          type: "object",
+          properties: { [field]: { type: "string" } },
+        });
+        scope.get(
+          `/serializer-cache/${field}`,
+          { schema: { response: { 200: { $ref: "SerializerCacheSibling#" } } } },
+          async () => ({ first: "one", second: "two" }),
+        );
+      });
+    }
+    for (const [field, value] of [
+      ["first", "one"],
+      ["second", "two"],
+    ]) {
+      const response = await app.inject({ method: "GET", url: `/serializer-cache/${field}` });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json(), { [field]: value });
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("API serializer compiler is the copy Fastify itself loads", () => {
+  // apps/controller pins @fastify/fast-json-stringify-compiler for its serializer cache. When
+  // a Fastify upgrade moves its own compiler, move the pin with it so one copy serves both.
+  const controller = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
+  const fastify = createRequire(controller.resolve("fastify"));
+  assert.equal(
+    realpathSync(controller.resolve("@fastify/fast-json-stringify-compiler")),
+    realpathSync(fastify.resolve("@fastify/fast-json-stringify-compiler")),
+  );
+});
+
 test("OCC isolates Namespace ownership and filters collections by exact IAM grants", async () => {
   const controller = await configuredController();
   await bootstrap(controller);
@@ -4800,12 +5319,14 @@ test("OCC isolates Namespace ownership and filters collections by exact IAM gran
   assert.equal(exactRevision.status, 404);
   assert.equal(exactRevision.body.error.code, "NOT_FOUND");
 
+  // The reader holds no grant in tenant A, so the misplaced parent is refused before any
+  // lookup, as getAgent does; a 404 here would confirm which Agents tenant A lacks.
   const wrongParent = await injectedRequest(
     revisionReaderApp,
     "GET",
     `/namespaces/${tenantA.data.id}/agents/${ownAgent.data.id}/revisions/${missingRevisionId}`,
   );
-  assert.equal(wrongParent.status, 404);
+  assert.equal(wrongParent.status, 403);
 
   fixture.state.roles.find((role) => role.id === "role-revision-only-reader").permissions.length =
     0;
@@ -5254,7 +5775,9 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   const computeDriver = createProvisioningCapableComputeDriver();
   let refusal;
   computeDriver.validateHarnessAuth = () => {
-    throw refusal;
+    if (refusal !== undefined) {
+      throw refusal;
+    }
   };
   const fixture = await createInjectedFixture({ computeDriver });
   const controller = {
@@ -5276,12 +5799,122 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   assert.equal(named.body.error.code, "INVALID_REQUEST");
   assert.equal(named.body.error.message, refusal.message);
 
-  // Other driver refusals can carry internal detail and stay generic.
+  // Other driver refusals can carry internal detail and get fixed text, not "already exists".
   refusal = new Error("internal driver detail");
   const generic = await deploy();
   assert.equal(generic.status, 409, JSON.stringify(generic.body));
   assert.equal(generic.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    generic.body.error.message,
+    "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
+  );
   assert.doesNotMatch(JSON.stringify(generic.body), /internal driver detail/);
+
+  // A gateway setting Kubernetes Compute refuses would fail every preparation attempt as an
+  // unavailable dependency; admission names it without its value, as provisioning does.
+  refusal = undefined;
+  const kubernetes = createTestKubernetesComputeDriver("compute-deploy-gateway-settings");
+  computeDriver.validateGatewaySettings = (configuration) =>
+    kubernetes.validateGatewaySettings(configuration);
+  for (const [name, gateway, message] of [
+    [
+      "gateway-token-agent",
+      { auth: { mode: "token" } },
+      "Configuration setting gateway.auth.mode must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication.",
+    ],
+    [
+      "gateway-proxies-agent",
+      { trustedProxies: ["10.99.0.0/16"] },
+      "Configuration setting gateway.trustedProxies must be omitted or match the Installation's network.gatewayTrustedProxyCidrs.",
+    ],
+  ]) {
+    const refusedAgent = await createAgent(controller, namespace.id, name, { gateway });
+    await bindHarnessKey(fixture, namespace.id, refusedAgent);
+    const refused = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/${refusedAgent.id}/deploy`,
+    );
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.deepEqual(
+      { code: refused.body.error.code, message: refused.body.error.message },
+      { code: "RESOURCE_CONFLICT", message },
+    );
+    assert.doesNotMatch(JSON.stringify(refused.body), /10\.99\./);
+    const revisions = await controller.request(
+      "GET",
+      `/namespaces/${namespace.id}/agents/${refusedAgent.id}/revisions`,
+    );
+    assert.deepEqual(revisions.data, [], JSON.stringify(revisions.body));
+  }
+  // A setting Compute leaves to preparation is admitted as before.
+  const allowUsersAgent = await createAgent(controller, namespace.id, "gateway-allow-users-agent", {
+    gateway: { auth: { mode: "trusted-proxy", trustedProxy: { allowUsers: ["someone"] } } },
+  });
+  await bindHarnessKey(fixture, namespace.id, allowUsersAgent);
+  const admitted = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${allowUsersAgent.id}/deploy`,
+  );
+  assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+  // The driver hook names only settings every preparation attempt refuses.
+  assert.doesNotThrow(() =>
+    kubernetes.validateGatewaySettings({
+      gateway: { auth: { mode: "trusted-proxy", trustedProxy: { allowUsers: ["someone"] } } },
+    }),
+  );
+
+  // Deploy authorization comes first: a caller who cannot deploy learns nothing of the setting.
+  const deniedAgent = await createAgent(controller, namespace.id, "gateway-denied-agent", {
+    gateway: { auth: { mode: "token" } },
+  });
+  await bindHarnessKey(fixture, namespace.id, deniedAgent);
+  const { principal: viewer } = await fixture.createAuthPrincipal("gateway-deploy-viewer");
+  fixture.state.identities.push(viewer);
+  fixture.state.roles.push({
+    id: "role-gateway-deploy-viewer",
+    namespaceId: namespace.id,
+    permissions: [
+      { action: "read", resourceKind: "agent" },
+      { action: "read", resourceKind: "configuration" },
+    ],
+  });
+  fixture.state.bindings.push({
+    id: "binding-gateway-deploy-viewer",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: viewer.id,
+    roleId: "role-gateway-deploy-viewer",
+  });
+  const denied = await injectedRequest(
+    fixture.createApp(viewer),
+    "POST",
+    `/namespaces/${namespace.id}/agents/${deniedAgent.id}/deploy`,
+  );
+  assert.equal(denied.status, 403, JSON.stringify(denied.body));
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+  assert.doesNotMatch(JSON.stringify(denied.body), /gateway\.auth|trusted-proxy/);
+
+  // An unavailable hook dependency answers 503; any other hook refusal stays with preparation.
+  const hookAgent = await createAgent(controller, namespace.id, "gateway-hook-agent");
+  await bindHarnessKey(fixture, namespace.id, hookAgent);
+  const deployHookAgent = () =>
+    controller.request("POST", `/namespaces/${namespace.id}/agents/${hookAgent.id}/deploy`);
+  computeDriver.validateGatewaySettings = () => {
+    throw new DependencyUnavailableError("The gateway setting check is unavailable.");
+  };
+  const unavailable = await deployHookAgent();
+  assert.equal(unavailable.status, 503, JSON.stringify(unavailable.body));
+  assert.equal(unavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const noRevisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${hookAgent.id}/revisions`,
+  );
+  assert.deepEqual(noRevisions.data, [], JSON.stringify(noRevisions.body));
+  computeDriver.validateGatewaySettings = () => {
+    throw new Error("internal gateway detail");
+  };
+  const deferred = await deployHookAgent();
+  assert.equal(deferred.status, 202, JSON.stringify(deferred.body));
 });
 
 test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {

@@ -86,7 +86,9 @@ from that revision; missing evidence leaves the cause unspecified. Held runtime
 failures end deployment early: `RUNTIME_AUTHENTICATION_FAILED` (rejected
 credential), `RUNTIME_CPU_STARVED`, `RUNTIME_MODEL_PROBE_TIMEOUT`,
 `RUNTIME_MODEL_PROBE_FAILED`, `RUNTIME_LOGIN_FAILED`, or
-`RUNTIME_STARTUP_FAILED`; fix and redeploy. `RUNTIME_MODEL_PROBE_FAILED` adds
+`RUNTIME_STARTUP_FAILED`; fix and redeploy. A dedicated gateway that refuses its
+own CLI fails with
+[`AGENT_GATEWAY_UNAUTHORIZED`](agents/deployment.md#pending-deployment-progress). `RUNTIME_MODEL_PROBE_FAILED` adds
 [`runtimeFailure`](agents/deployment.md#model-check-failure-cause). Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 
@@ -163,10 +165,10 @@ topology checks, and process readiness remain required; no credential-source
 permission is needed. Kubernetes and Docker reject this method. See
 [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
 
-API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. Deployment also
+API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. That includes
+the Secret the Agent already uses: every draft update checks it, including one that replaces it. Deployment also
 requires the Agent service principal's exact Secret `operate`. ChatGPT binding
-requires the actor's exact account `read`, including the current account when
-replacing or clearing a binding. There is no implied account grant for the Agent
+requires the actor's exact account `read`, including the current account on every draft update. There is no implied account grant for the Agent
 principal. Each consumer of a shared source is authorized independently.
 
 Deployment freezes binding references; dispatch rechecks source ownership and
@@ -217,7 +219,7 @@ removed after activation or Agent deletion. Pending inputs have no read/update
 API; correction requires deleting and recreating the Agent.
 
 The optional `workspaceDefaultsId` is a SHA-256 defaults identity. Console sends
-all four rendered `2026.9.7` defaults with this identity. A stale identity rejects
+all four rendered `2026.9.8` defaults with this identity. A stale identity rejects
 creation with `409 RESOURCE_CONFLICT`; runtime mismatch blocks initial setup.
 See the [workspace guide](../guides/topics/workspace-files.md) and
 [setup flow](../flows/workspace-files.md) for recovery and runtime requirements.
@@ -382,6 +384,9 @@ its compatibility limits before planning deployment.
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute
   implementation, or other required dependency is unavailable.
+- `503 RUNTIME_CREDENTIALS_CLUSTER_RBAC`: The cluster denied the API
+  ServiceAccount access to the Agent's runtime credential Secrets or Deployment
+  preflight. An operator must [grant the tenant RoleBindings](../guides/deploy/production-agents.md#grant-tenant-rolebindings).
 
 ## Related
 

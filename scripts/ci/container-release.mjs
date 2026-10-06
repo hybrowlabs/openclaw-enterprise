@@ -16,6 +16,15 @@ const platforms = ["linux/amd64", "linux/arm64"];
 const shaPattern = /^[a-f0-9]{40}$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const integerPattern = /^[1-9][0-9]*$/;
+// CI runs the runtime startup tests in two lanes; the release smoke runs their
+// startup files one at a time, since some cases measure timing.
+// container-release.test.mjs pins this list to both lane manifests.
+export const runtimeImageSmokeTests = Object.freeze([
+  "tests/integration/runtime-image-startup.test.mjs",
+  "tests/integration/runtime-image-startup-probe.test.mjs",
+  "tests/integration/runtime-image-gateway-peer.test.mjs",
+  "tests/integration/runtime-image-native-worker.test.mjs",
+]);
 
 export function validateContext(env, repo, workflow = publishWorkflow) {
   assert.equal(env.GITHUB_REPOSITORY, repository, "Only the Enterprise repository may publish.");
@@ -477,7 +486,10 @@ async function smoke(directory, env) {
       process.execPath,
       [
         "--test",
-        `tests/integration/${env.IMAGE === "controller" ? "production" : "runtime"}-image-startup.test.mjs`,
+        "--test-concurrency=1",
+        ...(env.IMAGE === "controller"
+          ? ["tests/integration/production-image-startup.test.mjs"]
+          : runtimeImageSmokeTests),
       ],
       {
         env: {

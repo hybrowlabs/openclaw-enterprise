@@ -104,7 +104,7 @@ rather than writing outside managed storage. Provider-owned Sandbox startup
 cannot carry this init container, so it rejects workspace setup instead of
 dropping initialization.
 
-The runner validates identity, paths, OpenClaw `2026.9.7`, and the rendered
+The runner validates identity, paths, OpenClaw `2026.9.8`, and the rendered
 template digest against Console defaults; defaults identities must match, and
 links and conflicts fail. Without a completion
 marker, native `setup` initializes the workspace and Git without starting the Gateway.
@@ -203,7 +203,11 @@ Other Harnesses are replaced, restarting their Gateway.
   through the public Gateway SDK, not a CLI process; each query has an
   eight-second deadline and cancels its connection on timeout, and later polls
   can retry. Acknowledging the binding still requires an active plugin in the
-  newly loaded registry. Otherwise the ID is set at Gateway start; losing it fails.
+  newly loaded registry. A Gateway that refuses that SDK connection's own
+  credentials (a fixed auth refusal such as `AUTH_UNAUTHORIZED`, not rate
+  limiting or pairing) reports `GATEWAY_UNAUTHORIZED` at once, and activation
+  fails with `AGENT_GATEWAY_UNAUTHORIZED`.
+  Otherwise the ID is set at Gateway start; losing it fails.
 - The Gateway's own `/home/node/workspace` stays empty. It withholds from Codex
   OpenClaw tools that act on it or run commands in the Gateway Pod
   (`ls`, `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
@@ -226,10 +230,12 @@ Other Harnesses are replaced, restarting their Gateway.
   [event name](common-logging.md#7-collector-exports-only-operational-classes).
   Deployment admission rejects the shapes it cannot rewrite: a non-list
   `codexDynamicToolsExclude`, a non-object Codex plugin `config`, `cron`,
-  `cron.triggers`, `models` or `models.providers`, and a `codex` or `openai`
-  row that is not an object or whose `models` is not a list of objects. The
-  deploy request fails with `400 INVALID_REQUEST` naming the setting path, and
-  no revision is created.
+  `cron.triggers`, `models` or `models.providers`. The deploy request fails
+  with `400 INVALID_REQUEST` naming the setting path, and no revision is
+  created. A provider row that is not an object, or whose `models` is not a
+  list of catalog entries for the Agent's configured models, is refused earlier by OCC's
+  model check: also `400 INVALID_REQUEST`, but with fixed text such as "The
+  configured Agent model provider is invalid." that does not name the path.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots for previews, browsing, bootstrap and outputs. Symlinks are not followed;
   explicit policies remain authoritative.
@@ -340,6 +346,10 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-06 18:40: Say that OCC's model check refuses malformed provider rows before the Codex Gateway shape check, without naming the path. (dogfood-r38)
+
+- 2026-10-04 00:40: Fail activation at once when the Gateway refuses its own SDK connection as unauthorized. (f351-gateway-unauthorized)
 
 - 2026-10-01 15:11: Query Gateway workspace binding state through bounded SDK calls. (authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c - 521549df)
 
