@@ -1,17 +1,19 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 status_note: "Decision request. Nothing in this RFC removes code. Each cut needs a maintainer decision and a separate implementation PR."
 ---
 
 # Proposal: Scope cuts to reduce complexity
 
-- **ID:** RFC-0053
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal). Decisions: OCE maintainers, with the Compute
   Driver and console owners for their areas.
 - **Created:** 2026-10-02
 - **Last updated:** 2026-10-02
 - **RFC PR:** [#898](https://github.com/openclaw/openclaw-enterprise/pull/898)
-- **Related:** [RFC-0046 (#853)][pr-853], [RFC-0047 (#855)][pr-855],
+- **Related:** [RFC #853][pr-853], [RFC #855][pr-855],
   [#519][pr-519], [#824][pr-824], [#830][pr-830], [#829][issue-829]
 - **Source baseline:** `main` at `63b21fb4b`. Line counts are `wc -l` on that
   commit.
@@ -47,7 +49,7 @@ path is cheaper before more installations depend on it.
 
 - Removing Kubernetes Compute, embedded OpenClaw, or the OpenShell Sandbox
   path.
-- Re-arguing decisions that RFC-0046 and RFC-0047 already record.
+- Re-arguing decisions that RFC #853 and RFC #855 already record.
 
 <a id="design"></a>
 
@@ -165,7 +167,7 @@ reason the Compose+Docker default exists.
 owner's OpenClaw config at every start. It withholds Gateway-local tools,
 turns cron triggers off and stubs the `codex`/`openai` provider rows. That
 work landed in #808 (+270), #814 (+61) and #824 (+245) and is recorded in
-RFC-0046. #830 (+518/-39, open, held) stubs every provider row and strips
+RFC #853. #830 (+518/-39, open, held) stubs every provider row and strips
 request `params`. A reviewer then found `channels.modelByChannel` and image,
 pdf, utility and gmail model refs that still reach a model.
 
@@ -177,13 +179,13 @@ Standard Codex preset.
 upstream opens another path, so the rewrite can never be complete. The
 remaining paths are operator-driven: `/model … --runtime openclaw`, Gateway
 config writes, and the Control UI terminal. The model cannot reach them
-(RFC-0046, finding D89). Upstream openclaw/openclaw#156193 shows the same
+(RFC #853, finding D89). Upstream openclaw/openclaw#156193 shows the same
 silent fallback to the built-in runtime outside OCE.
 
 **Proposal.**
 
 1. Decline #830 and keep #824 as the last provider-row rewrite. Close #830 with
-   a link to this RFC and RFC-0046.
+   a link to this RFC and RFC #853.
 2. Ask OpenClaw upstream for one runtime setting that disables fallback, rejects
    session runtime overrides, and ignores a plugin's declared
    `fallbackRuntime`. This ask has not been filed yet and needs owner approval.
@@ -197,7 +199,7 @@ with every OpenClaw release.
 
 **Risks.** Until upstream ships the setting, an operator who has Configuration
 write access on that Agent can still route a session to the built-in runtime
-through a provider row #824 does not cover. RFC-0046 accepts this as an
+through a provider row #824 does not cover. RFC #853 accepts this as an
 operator-level risk. Disabling the terminal costs operators a debug shell; they
 still have `kubectl exec`.
 
@@ -251,13 +253,13 @@ workspace through a paired OpenClaw node.
   along with 20 test files and 13 docs pages.
 - The Gateway-side isolation from candidate 4, which exists because the Gateway
   process can also run tools.
-- RFC-0047's 16-PR first-deploy pipeline, the cluster-wide `patch` on `pods`,
+- RFC #855's 16-PR first-deploy pipeline, the cluster-wide `patch` on `pods`,
   and the status-proxy CIDR requirement.
 
 **What a single Pod would cost.** If both containers ran in the data-plane Pod,
 the Gateway would share the network namespace and node with model-run code.
 That would undo the control-plane Gateway placement (plan 36) and the
-Gateway–Harness storage split (RFC 28). Channel credentials
+Gateway–Harness storage split (RFC-0003). Channel credentials
 and the transcript would then sit next to untrusted code, as embedded OpenClaw
 does today.
 
@@ -273,15 +275,15 @@ All seven predate the current spec layout (#757), so none use
 others last changed through a main-merge or a small commit on 09-29 or 09-30.
 Their other recent activity is automated review comments.
 
-| PR     | Topic                                     | Last activity                                        | Recommendation                                                                               |
-| ------ | ----------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [#247] | Agent execution identity (SPIRE)          | commit 09-24; maintainer deferred it on 09-21        | Close as deferred; reopen after repository credentials settle                                |
-| [#248] | gVisor container support                  | commit 09-29 rescoped it to 1.x                      | Close and park for 1.x                                                                       |
-| [#250] | Agent history and audit retention         | main-merge 09-29; last human review 09-21            | Close as superseded by #574 (same `specs/31-basic-observability`)                            |
-| [#458] | Guarded Kubernetes runtime activation     | main-merge 09-29; no human review                    | Close; RFC-0047 links it as the open activation-evidence proposal. Number 42 is now RFC-0042 |
-| [#460] | Settlement for uncertain console edits    | commit 09-30; no human review                        | Close and park; it adds a new state mechanism, out of quality scope                          |
-| [#574] | Lifecycle history and audit retention     | main-merge 09-29; external review question 09-30     | Park until after launch with #577; answer the question first                                 |
-| [#654] | OpenShell projections for dedicated Codex | commit 09-30; maintainer offered a design sync 09-30 | Keep open until that sync happens                                                            |
+| PR     | Topic                                     | Last activity                                        | Recommendation                                                                                          |
+| ------ | ----------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [#247] | Agent execution identity (SPIRE)          | commit 09-24; maintainer deferred it on 09-21        | Close as deferred; reopen after repository credentials settle                                           |
+| [#248] | gVisor container support                  | commit 09-29 rescoped it to 1.x                      | Close and park for 1.x                                                                                  |
+| [#250] | Agent history and audit retention         | main-merge 09-29; last human review 09-21            | Close as superseded by #574 (same `specs/31-basic-observability`)                                       |
+| [#458] | Guarded Kubernetes runtime activation     | main-merge 09-29; no human review                    | Close; RFC #855 links it as the open activation-evidence proposal. Number 42 was RFC-0042, now RFC-0001 |
+| [#460] | Settlement for uncertain console edits    | commit 09-30; no human review                        | Close and park; it adds a new state mechanism, out of quality scope                                     |
+| [#574] | Lifecycle history and audit retention     | main-merge 09-29; external review question 09-30     | Park until after launch with #577; answer the question first                                            |
+| [#654] | OpenShell projections for dedicated Codex | commit 09-30; maintainer offered a design sync 09-30 | Keep open until that sync happens                                                                       |
 
 No other open draft RFC PR predates 10-01. Draft feature PRs #378 and #508
 have had no activity since 09-26 and 09-28. They are not RFCs and are outside
@@ -323,8 +325,8 @@ owner who decides it.
 
 ## References
 
-- RFC-0046, dedicated Codex Gateway isolation: [#853][pr-853]
-- RFC-0047, first-deploy activation: [#855][pr-855]
+- Dedicated Codex Gateway isolation RFC: [#853][pr-853]
+- First-deploy activation RFC: [#855][pr-855]
 - Compute matrix: [`docs/reference/drivers/compute-matrix.md`](../../docs/reference/drivers/compute-matrix.md)
 - Local profiles: [`docs/guides/deploy/local-kubernetes-development.md`](../../docs/guides/deploy/local-kubernetes-development.md)
 
