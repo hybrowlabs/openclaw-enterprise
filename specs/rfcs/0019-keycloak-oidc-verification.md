@@ -1,19 +1,21 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 ---
 
 # Proposal: Verify Keycloak OIDC sign-in locally and in CI
 
-- **ID:** RFC-0059
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal and auth review); CI and Local Setup review: OCE maintainers.
 - **Created:** 2026-10-03
 - **Last updated:** 2026-10-04 (implementation open as a six-PR stack, see Delivery)
 - **RFC PR:** [#1117](https://github.com/openclaw/openclaw-enterprise/pull/1117)
-- **Related:** [RFC-0042](0042-oidc-sign-in.md) (generic OIDC sign-in; implementation
+- **Related:** [RFC-0001](0001-oidc-sign-in.md) (generic OIDC sign-in; implementation
   [#790](https://github.com/openclaw/openclaw-enterprise/pull/790));
   [OIDC sign-in guide](../../docs/guides/deploy/oidc-sign-in.md); in-cluster IdP egress note
   [#903](https://github.com/openclaw/openclaw-enterprise/pull/903); token service
-  [RFC-0056 (#924)](https://github.com/openclaw/openclaw-enterprise/pull/924).
+  [RFC #924](https://github.com/openclaw/openclaw-enterprise/pull/924).
 
 <a id="problem-and-decision"></a>
 
@@ -52,18 +54,18 @@ the 30-day bootstrap service key, and `occ dev up` has no sign-in option.
 - IdP-issued credentials for API clients (bearer tokens, token exchange, client credentials,
   device flow). Bearer authentication stays disabled
   ([auth/index.ts](../../apps/controller/src/auth/index.ts), `verify`); short-lived machine
-  credentials are RFC-0056's territory.
+  credentials are RFC #924's territory.
 - Claim mapping, just-in-time accounts, RP-initiated or back-channel logout, runtime
-  discovery, private-key client authentication: RFC-0042's non-goals stand.
+  discovery, private-key client authentication: RFC-0001's non-goals stand.
 - New chart surface: no IdP CA value, no egress port knob, no relaxed endpoint rules. The
   in-cluster egress workaround stays a documented extra NetworkPolicy.
 - Relaxing the OIDC and native-admin exclusivity, for development included: OIDC supports
   host-only cookies only
   ([\_helpers.tpl](../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl)), a
-  cookie-scope decision (RFC 31, RFC-0042).
+  cookie-scope decision (RFC-0007, RFC-0001).
 - Keycloak as a production recipe: `start-dev` and the dev-file database are development
   tooling; the guide says so.
-- Verifying Auth0, Okta or Entra ID, or changing RFC-0042's status.
+- Verifying Auth0, Okta or Entra ID, or changing RFC-0001's status.
 
 <a id="design"></a>
 
@@ -172,12 +174,12 @@ started. The suite audit lists the expected test names, and a skip fails the lan
 
 ### What changes for credentials
 
-For humans, the Console session is the eight-hour, non-refreshing session RFC-0042 already
+For humans, the Console session is the eight-hour, non-refreshing session RFC-0001 already
 gives OIDC sign-in; the change is that Local Setup can use it. Scoping stays OCE IAM on the
 attached account; Keycloak decides only who may authenticate. For automation, nothing
 changes: bootstrap still writes a 30-day service key, shorter-lived keys come from the
 [service-key API](../../docs/reference/authentication/service-api-keys.md) (`expiresIn`),
-and IdP-issued machine credentials wait for RFC-0056.
+and IdP-issued machine credentials wait for RFC #924.
 
 ### Security and failure
 
