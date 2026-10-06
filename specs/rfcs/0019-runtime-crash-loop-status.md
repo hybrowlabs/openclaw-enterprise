@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Partially implemented
+author: freeqaz
 status_note: "Needs human review before landing. The accompanying draft implements step 1 only."
 ---
 
 # Proposal: Report a crash-looping runtime in the deployment record
 
-- **ID:** RFC-0050
+- **ID:** RFC-0019
 - **Owner:** Controller worker and Kubernetes Compute Driver. Review: API contract owners.
 - **Created:** 2026-10-02
 - **Last updated:** 2026-10-02
