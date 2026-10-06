@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 status_note: "Needs human review before landing. The accompanying draft implements Option A only."
 ---
 
 # Proposal: Level floors for plain-text runtime log lines
 
-- **ID:** RFC-0051
+- **ID:** RFC-0019
 - **Owner:** OCC runtime log reads (`packages/occ/src/runtime-logs`). Review: API
   contract owners and the CLI and Console log viewers.
 - **Created:** 2026-10-02
