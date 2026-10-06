@@ -409,7 +409,11 @@
                 ]
               }
             ],
-            "hidden": ["guides/repository-credentials/standalone-service"]
+            "hidden": [
+              "guides/repository-credentials/standalone-service",
+              "guides/repository-credentials/development-token",
+              "reference/repository-credentials/development-token"
+            ]
           },
           {
             "tab": "Operate",
@@ -447,6 +451,10 @@
                     "label": "Upgrade Checklist"
                   },
                   {
+                    "page": "guides/deploy/upgrade-baseline",
+                    "label": "Upgrade Baseline"
+                  },
+                  {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
                   },
@@ -456,7 +464,7 @@
                   },
                   {
                     "page": "guides/deploy/auth-maintenance",
-                    "label": "Sign-in Maintenance"
+                    "label": "External Sign-in Maintenance"
                   },
                   {
                     "page": "guides/deploy/google-sign-in",
@@ -511,6 +519,10 @@
                   {
                     "page": "guides/operate/model-verification",
                     "label": "Model Response Verification"
+                  },
+                  {
+                    "page": "guides/operate/network-isolation",
+                    "label": "Network Isolation Check"
                   },
                   {
                     "page": "guides/deploy/native-admin",
@@ -809,6 +821,10 @@
                         "label": "CI"
                       },
                       {
+                        "page": "testing/first-agent-smoke",
+                        "label": "First Agent Smoke"
+                      },
+                      {
                         "page": "testing/ci-manual-integration",
                         "label": "Manual Integration Lanes"
                       },
@@ -919,6 +935,7 @@
               "testing/service-accounts",
               "testing/plugins",
               "testing/openshell",
+              "testing/openshell-first-agent",
               "testing/openshell-pre5-local-experiment",
               "flows/agent-repository-credentials",
               "flows/repository-credentials",
