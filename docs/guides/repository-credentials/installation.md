@@ -12,7 +12,9 @@ Sandbox Driver.
 
 Create `registry.json` using the [canonical registry schema](../../reference/repository-credentials.md#canonical-platform-registry).
 Use the real GitHub App, installation and numeric repository IDs, and the
-server-assigned OCC Namespace IDs. One App installation can serve several
+server-assigned OCC Namespace IDs. Installations always use a GitHub App; the
+[development token authority](../../reference/repository-credentials/development-token.md)
+is standalone and development-only. One App installation can serve several
 repository entries; each Agent binding still admits a separate single-repository
 session. The example below uses Backend ID `repository-backend`, registry
 maximum duration `86400`, and all three profiles.
@@ -251,9 +253,10 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 Expect one worker Pod containing worker and credential-service containers, a
 `Recreate` deployment, and the internal HTTPS Service. The API mounts only the
 registry and public CA; the worker additionally mounts the private control
-socket; App/TLS private inputs stay in the service container. Kubernetes API
-service-account token projection is worker-only. Confirm those mounts from the
-rendered manifests before deploying an Agent.
+socket; App/TLS private inputs stay in the service container. In the worker
+Pod, only the worker container receives a Kubernetes API service-account token;
+the credential-service container (`repository-credentials`) gets none. Confirm
+those mounts from the rendered manifests before deploying an Agent.
 
 A ready sidecar confirms protected startup and the control listener. Continue
 with [Agent creation, deployment and a repository task](../repository-credentials.md#create-and-deploy-an-agent)

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-02
-last_updated_session: authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e
+updated: 2026-10-04
+last_updated_session: authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76
 ---
 
 # Compose development startup
@@ -125,7 +125,7 @@ attempts, and failure recovery.
 ### 4. The API admits only local development traffic
 
 `apps/controller/src/server.mjs:start`,
-`apps/controller/src/composition/development-postgres.ts:createDevelopmentConfigurationDriver`,
+`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`,
 `apps/controller/src/drivers/configuration/filesystem/index.ts:FilesystemConfigurationDriver`
 
 The API starts in `NODE_ENV=development`, binds inside the Compose network, and
@@ -185,8 +185,16 @@ Compose service with Docker-compatible engine access.
 `internal/occdev/gateway_k3d.go:installDevelopmentRoutingControllers`,
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
+Before tool discovery or state creation, `upK3d` requires the control-plane Kubernetes
+namespace name to match a DNS label of at most 63 characters. Cleanup accepts the historical
+Namespace syntax in recorded state, including longer names, and deletes only the
+validated recorded cluster through its recorded engine endpoint. All other state
+validation and ownership checks still apply.
+
 Both k3d profiles use legacy iptables and honor an explicit IPv4 node resolver
-without changing host DNS;
+without changing host DNS.
+Linux Docker's automatic host resolver selection ignores trailing nameserver
+fields, matching glibc parsing.
 `internal/occdev/node_dns_k3d.go:checkDevelopmentNodeDNS` fails startup on
 refused node DNS. Kubernetes-only startup imports matching OCE images into the
 cluster.
@@ -194,7 +202,7 @@ cluster.
 Without OpenShell, it verifies the pinned cert-manager and Envoy Gateway
 manifests and waits for the k3s-owned Gateway API CRDs before installing Envoy,
 printing k3s add-on status before rollback on failure.
-`internal/occdev/gateway_k3d.go:waitForCRDEstablished` polls each CRD every
+`internal/occdev/gateway_k3d.go:waitDevelopmentCRDEstablished` polls each CRD every
 second until `Established`, stopping on a `kubectl` error or startup
 timeout. Before configuring gateway proxy trust,
 `internal/occdev/network_k3d.go:verifyDevelopmentNetworkPolicy`
@@ -322,6 +330,9 @@ Installation with `occclient`. Its ID must match the bootstrap response before
 the final key file is written exclusively. With OpenShell, startup waits for the
 bootstrap Kubernetes Namespace and for OCC to report it ready, proving the
 Sandbox Driver created or adopted its operator-mode Workspace.
+Namespace readiness and repository discovery bind each OCC request to the
+polling deadline and caller cancellation via `occclient.Client.WithContext`.
+The original client remains available for later startup operations.
 
 Both Kubernetes profiles pass `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` to
 `k3d cluster create --timeout`, so a node that never becomes ready fails startup
@@ -360,7 +371,11 @@ external key if a later OpenShell readiness step fails.
 
 ## Changelog
 
+- 2026-10-04 01:12: Pointed the API startup step at the existing composition function. (authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76 - 7a8a64046ac8ef3e7b5a4ed46b1d4cef9f1573f3)
+
 - 2026-10-02 11:01: Polled CRD status instead of `kubectl wait`. (authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e - 67302dd99e03d28053dbb72ba2569418f6aca1d0)
+
+- 2026-10-02: Treated an absent initial CRD condition as pending.
 
 - 2026-09-30 00:26: Tightened startup prose without changing its behavior. (authoring-run/6c4c7a4c-4674-456a-b1c4-69cec0c52c70 - 282ab1031ff2dd86af00c0c3ff304c9ad442fec1)
 

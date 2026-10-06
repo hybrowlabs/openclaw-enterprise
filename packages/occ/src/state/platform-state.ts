@@ -56,6 +56,7 @@ import {
   normalizeSecretBindings,
   validPluginRevisionState,
   validPluginApprovers,
+  isBackendId,
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
@@ -392,7 +393,6 @@ const serviceAccountIdentifier =
   /^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const secretName = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
 const secretKey = /^[-._a-zA-Z0-9]+$/;
-const backendIdentifier = /^(?!\s)(?!.*\s$)(?!.*[\x00-\x1f\x7f]).{1,200}$/;
 
 function validCredential(credential: unknown): credential is ServiceAccountCredential {
   if (
@@ -602,8 +602,7 @@ export async function assertHarnessAuthAvailable(
 
 function assertAdmittedAgentRevision(revision: AgentRevision): void {
   if (
-    (revision.backendId !== null &&
-      (typeof revision.backendId !== "string" || !backendIdentifier.test(revision.backendId))) ||
+    (revision.backendId !== null && !isBackendId(revision.backendId)) ||
     !/^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       revision.configurationId,
     ) ||
@@ -1007,7 +1006,7 @@ function assertSecret(secret: Secret): void {
     !namespaceIdentifier.test(secret.namespaceId) ||
     typeof secret.name !== "string" ||
     secret.name.length < 1 ||
-    secret.name.length > 200 ||
+    Array.from(secret.name).length > 200 ||
     secret.name !== secret.name.trim() ||
     /[\x00-\x1f\x7f]/.test(secret.name) ||
     typeof secret.driverId !== "string" ||
@@ -1058,7 +1057,7 @@ function assertCredentialSource(source: CredentialSource): void {
     !namespaceIdentifier.test(source.namespaceId) ||
     typeof source.name !== "string" ||
     source.name.length < 1 ||
-    source.name.length > 200 ||
+    Array.from(source.name).length > 200 ||
     source.name !== source.name.trim() ||
     Array.from(source.name).some((character) => {
       const code = character.charCodeAt(0);
@@ -1853,7 +1852,7 @@ function repositories(
         !serviceAccountIdentifier.test(account.id) ||
         typeof account.name !== "string" ||
         account.name.length < 1 ||
-        account.name.length > 200 ||
+        Array.from(account.name).length > 200 ||
         account.name !== account.name.trim() ||
         /[\x00-\x1f\x7f]/.test(account.name) ||
         (account.credential !== undefined && !validCredential(account.credential))
@@ -2027,10 +2026,7 @@ function repositories(
       if (agent.executionMode !== "embedded" && agent.executionMode !== "dedicated") {
         throw new ScopeViolationError("The Agent execution mode is invalid.");
       }
-      if (
-        agent.backendId !== null &&
-        (typeof agent.backendId !== "string" || !backendIdentifier.test(agent.backendId))
-      ) {
+      if (agent.backendId !== null && !isBackendId(agent.backendId)) {
         throw new ScopeViolationError("The Agent Backend identity is invalid.");
       }
       const plugins = normalizedPlugins(agent.plugins);
@@ -2152,7 +2148,7 @@ function repositories(
       if (!current) {
         return undefined;
       }
-      if (backendId !== undefined && backendId !== null && !backendIdentifier.test(backendId)) {
+      if (backendId !== undefined && backendId !== null && !isBackendId(backendId)) {
         throw new ScopeViolationError("The Agent Backend identity is invalid.");
       }
       if (

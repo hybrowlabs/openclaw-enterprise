@@ -30,12 +30,16 @@ namespace must already be `Active`, carry
 security labels, and have the required tenant-local RoleBindings. The worker
 rejects foreign tenant markers and NetworkPolicies before binding its exact
 `openclaw.dev/namespace` Namespace-ID label and `openclaw.dev/namespace-id`
-annotation together with a `resourceVersion`-guarded, non-forced patch;
+annotation (and, in single-cluster Compute, the `openclaw.dev/gateway-namespace`
+label) together with a `resourceVersion`-guarded, non-forced patch;
 concurrent ownership changes cannot overwrite another tenant's claim.
 Additive foreign policies could otherwise defeat default-deny isolation. The
 namespace and its existing manager remain operator-owned;
 persisted uniqueness prevents simultaneous claims, and retained tenant markers
-prevent reassignment until an operator deliberately clears both old markers.
+prevent reassignment until an operator deliberately clears all of the old
+markers: the `openclaw.dev/namespace` label, the `openclaw.dev/namespace-id`
+annotation and, in single-cluster Compute, the `openclaw.dev/gateway-namespace`
+label. A selection that still finds any of them ends `failed`.
 
 Each tenant namespace also receives:
 
@@ -125,7 +129,7 @@ runtime verification. Profile generation and CI use the same reviewed rules;
 host installation remains operator-owned.
 
 The optional profile is for cases where `RuntimeDefault` blocks the
-user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.158.0`
+user-namespace `clone`, `unshare`, `mount`, and `pivot_root` calls used by Codex `0.160.0`
 and bubblewrap. The profile is a syscall compatibility allowlist, not the
 filesystem or network boundary. Codex and bubblewrap continue to own runtime
 filesystem enforcement, and Kubernetes NetworkPolicies plus the configured
@@ -263,9 +267,11 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   and URLs are redacted and cut to 1 KiB.
 - **Errors.** Driver and cluster error text never reaches a client; failures map
   to fixed codes.
-- **Ordering.** The operator switch (`501`) and the per-principal rate limit
-  run before authorization, so a principal without grants learns only whether
-  the feature is on and can spend only its own request budget.
+- **Ordering.** The operator switch (`501`) runs before authorization, so a
+  principal without grants learns only whether the feature is on. The
+  per-principal rate limit and the replica's concurrent-read limit apply after
+  authorization: every denial is refused and audited, and only authorized
+  requests spend the caller's request budget.
 - **Cluster access.** The tenant API, Gateway observer and execution tenant API
   roles gain read-only `pods/log get` and `events get,list` through
   `agentRuntimeLogs.enabled`. RBAC cannot separate Agents, so OCC reads only

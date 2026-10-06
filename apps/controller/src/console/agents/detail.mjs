@@ -808,8 +808,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       !visibleRevisions.some((revision) => revision.id === revisionId)
     );
   }
+  // Members have no console chat, and native admin needs administer (and is off under
+  // external sign-in), so point only at paths that work in every sign-in mode.
   const readAccessHint =
-    "Ask an Agent administrator for read access to new versions, or check the Agent's chat or native admin UI.";
+    "Ask an Agent administrator for read access to new versions. If this Agent is set up for a channel such as Slack, you can message it there when that channel allows you.";
   function renderCurrentVersion() {
     const current = visibleRevisions.find((revision) => revision.id === currentRevisionId);
     const version = current
@@ -1116,7 +1118,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           ? element(
               "p",
               { className: "muted" },
-              "No readable versions. Creating an Agent alone does not create a version.",
+              // A current version, or a deploy that set the Agent running, means versions
+              // exist and are hidden. A stopped Agent may have versions too; the record cannot say.
+              currentRevisionId || currentRuntimeState === "running"
+                ? "No readable versions. This Agent has versions your access does not include. Ask an Agent administrator for read access to them."
+                : "No readable versions. Creating an Agent alone does not create a version; if this Agent was deployed before, your access does not include its versions.",
             )
           : null,
       ].filter(Boolean),
@@ -1230,9 +1236,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         .filter(Boolean)
         .join(" ");
     } else if (replacementFailed) {
-      statusLine.textContent = `v${latest.revision} deployment failed. ${currentLabel} is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
+      statusLine.textContent = `v${latest.revision} deployment failed. ${currentLabel} is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: expect no answers in its channels or anywhere else until a new version deploys. Fix the failure, then deploy a new version.`;
     } else if (selectedFailed) {
-      statusLine.textContent = `${currentLabel} deployment failed. ${currentLabel} is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
+      statusLine.textContent = `${currentLabel} deployment failed. ${currentLabel} is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: expect no answers in its channels or anywhere else until a new version deploys. Fix the failure, then deploy a new version.`;
     } else if (latestDeploymentStatus) {
       const selection = currentRevisionId
         ? `${currentLabel} is selected.`
@@ -1647,13 +1653,16 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             context.onExpired();
             return;
           }
-          deployFeedback.textContent =
-            error.status === 403
+          // The cluster refused the credential check before admission: no version was created.
+          const clusterRbac = error.code === "RUNTIME_CREDENTIALS_CLUSTER_RBAC";
+          deployFeedback.textContent = clusterRbac
+            ? "Deployment refused: the cluster denied OCC access to this Agent's connection credentials. Ask a platform operator to grant the documented tenant RoleBindings, then deploy again."
+            : error.status === 403
               ? "Deployment denied. Check Agent deploy permission and access to selected Secrets. First deployment also needs Agent read and operate permissions to create connection credentials. Ask a Namespace administrator to confirm the required grants."
               : error.status === 409
                 ? "Deployment conflicts with the saved Agent state. Refresh this Agent to check for changed Configuration or missing connection credentials. If credentials are missing after an earlier version, ask an operator to restore them."
                 : rejectionMessage(error, submitted);
-          if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
+          if (!submitted || clusterRbac || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
         } finally {
