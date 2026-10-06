@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 status_note: "Retroactive record. The design below is implemented on main (PRs #696 through #811, with follow-ups through #969) and awaits human review. No acceptance decision has been recorded; Proposed is the closest allowed status."
 ---
 
 # Proposal: Agent runtime status and log reads
 
-- **ID:** RFC-0048
+- **ID:** RFC-0019
 - **Owner:** needs a human owner; this record was written from the landed PRs
 - **Created:** 2026-10-01
 - **Last updated:** 2026-10-03
@@ -13,9 +15,9 @@ status_note: "Retroactive record. The design below is implemented on main (PRs #
 - **Implementation:** [#696], [#711], [#726], [#730], [#737], [#739], [#741], [#742], [#745],
   [#747], [#793], [#807], [#811] (with the event from [#806]). Follow-ups: [#863], [#869],
   [#876], [#879], [#896], [#928], [#933], [#939], [#967], [#969]
-- **Related:** [Default production observability](36-production-observability.md) (the
-  Collector boundary), [Agent access](36-agent-access.md) (native admin audience),
-  [RFC-0042](0042-oidc-sign-in.md) (sign-in provider outages)
+- **Related:** [Default production observability](0012-production-observability.md) (the
+  Collector boundary), [Agent access](0010-agent-access.md) (native admin audience),
+  [RFC-0001](0001-oidc-sign-in.md) (sign-in provider outages)
 - **Source baseline:** `main` at `04d01d02e`. Symbols below were checked there.
 
 <a id="problem-and-decision"></a>
@@ -160,7 +162,7 @@ diagnostics.
 
 ### Collector export ([#793], [#811], [#863], [#879], [#896])
 
-The Collector boundary in RFC 36 is unchanged. These bounded additions landed:
+The Collector boundary in RFC-0012 is unchanged. These bounded additions landed:
 
 - `codex.turn` and `codex.tool_call` are exported with fixed bodies. A `codex.operational`
   body keeps Codex's own message only for `codex_app_server` targets and two fixed retry
