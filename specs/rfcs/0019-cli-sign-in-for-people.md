@@ -1,10 +1,12 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 ---
 
 # Proposal: Short-lived CLI sign-in for people
 
-- **ID:** RFC-0062
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal and auth review). Scope and release: OCE maintainers.
 - **Created:** 2026-10-04
 - **Last updated:** 2026-10-04
@@ -14,7 +16,7 @@ status: Proposed
   [external sign-in and account controls](../../docs/reference/authentication/external-sign-in.md);
   [service API keys](../../docs/reference/authentication/service-api-keys.md);
   [authorization](../../docs/reference/authorization.md#principals);
-  [RFC-0042 OIDC sign-in](0042-oidc-sign-in.md); RFC-0056 token service (#924, proposed).
+  [RFC-0001 OIDC sign-in](0001-oidc-sign-in.md); RFC #924 token service (proposed).
 
 <a id="problem-and-decision"></a>
 
@@ -71,7 +73,7 @@ and API (the round-15 matrix matched the docs), but not in the CLI.
 - Down-scoping below the person's grants, beyond an optional Namespace pin. Read-only
   sessions are future work.
 - Noticing an IdP-side disable. As in the browser, the session lifetime bounds it.
-- Agent or workload authentication (RFC-0056 and the deferred workload-identity work).
+- Agent or workload authentication (RFC #924 and the deferred workload-identity work).
 
 <a id="design"></a>
 
@@ -251,9 +253,9 @@ CI and unattended automation keep
 [service API keys](../../docs/reference/authentication/service-api-keys.md); a CLI session
 needs interactive approval and ends with a person's session.
 
-### Relation to RFC-0056 (token service)
+### Relation to RFC #924 (token service)
 
-RFC-0056 leases _outbound_ upstream credentials, such as GitHub tokens, to Agents through
+RFC #924 leases _outbound_ upstream credentials, such as GitHub tokens, to Agents through
 Agent-scoped bearers. Interactive login and a public token API are outside its first
 delivery. This RFC issues _inbound_ OCC admission evidence to people. The two are
 compatible and deliberately separate:
@@ -355,4 +357,4 @@ Required evidence:
   [controller auth](../../apps/controller/src/auth/index.ts);
   [session binding schema](../../migrations/0037_human_authentication.sql).
 - [`occ` client](../../internal/occclient/client.go); [`occ` commands](../../internal/occcli/cli.go).
-- RFC 8628 (device authorization grant); RFC 8252 (native apps); RFC-0056 (#924).
+- RFC 8628 (device authorization grant); RFC 8252 (native apps); RFC #924.
