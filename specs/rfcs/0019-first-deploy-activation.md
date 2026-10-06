@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 status_note: "Retroactive record. The design is already implemented on main (PRs below, merged 2026-09-29 to 2026-10-03). Proposed means the decision still awaits human review, not that the code is pending."
 ---
 
 # Proposal: First-deploy activation for dedicated Agents on Kubernetes
 
-- **ID:** RFC-0047
+- **ID:** RFC-0019
 - **Owner:** Kubernetes Compute Driver and runtime entrypoints. Review: Compute and security owners.
 - **Created:** 2026-10-01
 - **Last updated:** 2026-10-03
