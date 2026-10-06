@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 status_note: "Needs human review before landing. No implementation accompanies this proposal."
 ---
 
 # Proposal: Cacheable Console assets
 
-- **ID:** RFC-0054
+- **ID:** RFC-0019
 - **Owner:** Controller HTTP serving and Console. Review: Console and release owners.
 - **Created:** 2026-10-02
 - **Last updated:** 2026-10-02
