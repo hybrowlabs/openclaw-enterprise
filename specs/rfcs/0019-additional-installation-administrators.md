@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 status_note: "Needs human review before landing. This PR changes documentation only; it implements no option."
 ---
 
 # Proposal: Additional Installation administrators
 
-- **ID:** RFC-0052
+- **ID:** RFC-0019
 - **Owner:** IAM and authentication. Review: IAM model owners.
 - **Created:** 2026-10-02
 - **Last updated:** 2026-10-02
