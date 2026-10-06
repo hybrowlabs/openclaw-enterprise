@@ -65,15 +65,17 @@ context is optional in TypeScript; the worker supplies it after authorization.
 
 ### Optional additions
 
-| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                      |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision; may be asynchronous. Failure stops that attempt before further runtime work.                                                    |
-| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment requires this side-effect-free check of the Harness, authentication snapshot, and native Configuration. A missing method causes a dependency-unavailable error; a thrown error becomes a resource conflict before queueing. |
-| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                            |
-| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                            |
-| `resolveSandboxNamespace`, `withdrawCredentialSource`                  | [Credential Gateway](credential-gateway.md#optional-additions) hooks for registration and withdrawal.                                                                                                                                  |
-| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                             |
-| `requiresStoppedPredecessors(revision)`                                | A side-effect-free declaration, derived from the admitted revision, that opts into [exclusive replacement](#production-revision-stages).                                                                                               |
+| Method or declaration                                                  | When it is needed                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bindAgent({ namespace, agent })`                                      | Receives the approved Namespace, Agent, and ServicePrincipal before the worker operates on a revision; may be asynchronous. Failure stops that attempt before further runtime work.                                                                                                           |
+| `validateHarnessAuth(harness, auth, configuration)`                    | Deployment and provisioning require this side-effect-free check of the Harness, authentication snapshot, and native Configuration. A missing method is a dependency-unavailable error. A thrown `ConfigurationHarnessError` answers `400` with its message; other errors become a conflict.   |
+| `validateGatewaySettings(configuration)`                               | Optional side-effect-free deployment check after `validateHarnessAuth`. Throw `ComputeGatewaySettingError` for a native gateway setting every preparation would refuse; OCC answers `409` with its message, which names the setting and never its value. Leave other refusals to preparation. |
+| `activateRevision(revision, context?)`, `deactivateRevision(revision)` | Production startup requires both. The worker also calls activation if a development Driver provides it. See [revision stages](#production-revision-stages).                                                                                                                                   |
+| `setLifecycleDrivers(drivers)`                                         | Startup requires it when another selected Driver provides [Compute hooks](#optional-selected-driver-hooks).                                                                                                                                                                                   |
+| `describePrepareRevisionFailure(error)`                                | Returns bounded safe fields for rejected preparation. OCC attributes them to the revision without serializing the raw error. Omission preserves generic retries.                                                                                                                              |
+| `resolveSandboxNamespace`, `withdrawCredentialSource`                  | [Credential Gateway](credential-gateway.md#optional-additions) hooks for registration and withdrawal.                                                                                                                                                                                         |
+| `activationOrder`, `maintenanceIntervalMs`                             | Control [activation timing](#production-revision-stages) and optional [maintenance](#optional-active-runtime-maintenance).                                                                                                                                                                    |
+| `requiresStoppedPredecessors(revision)`                                | A side-effect-free declaration, derived from the admitted revision, that opts into [exclusive replacement](#production-revision-stages).                                                                                                                                                      |
 
 ### Optional startup preflight
 
@@ -105,6 +107,13 @@ sets up those credentials. The caller holds Namespace and Agent locks,
 requires a ready Namespace with no earlier revision, and passes approved
 identities, never storage names. Missing methods fail. External writes can
 survive database or audit failure.
+
+Agent provisioning also requires `validateAgentProvisioning({ executionMode,
+configuration })`. A thrown `ComputeGatewaySettingError` reaches the caller as a
+`409` naming the setting, and the worker stores it as a permanent
+`PROVISIONING_REJECTED`. `DependencyUnavailableError` stays a retryable
+dependency failure. Any other error becomes a fixed `409`, with the first 512
+characters of its message logged as `reason`.
 
 With `requiresAgentRuntimeCredentials: true`, OCC checks stored status and
 [creates missing transport credentials](../console/create-and-deploy.md#initial-runtime-credentials)

@@ -72,7 +72,12 @@ tenant-local RoleBindings must already be in place; see
 Docker and external Compute Drivers reject this option with
 `409`; ordinary creation without the option remains supported. Creating a
 Configuration in an explicitly selected external Namespace returns
-`409 NAMESPACE_NOT_READY` until worker provisioning completes.
+`409 NAMESPACE_NOT_READY` until worker provisioning completes. Deleting the
+OCC Namespace leaves its tenant markers on the Kubernetes namespace, so
+selecting that namespace again ends `failed` until an operator clears them; see
+[Namespace admission](security.md#namespace-admission-and-resource-isolation).
+A `failed` Namespace does not say why; the worker logs only
+`code: NAMESPACE_INCOMPLETE`.
 
 ## Lifecycle
 
@@ -153,7 +158,8 @@ workload is ready.
 
 ## Failure semantics and limitations
 
-- `401`: The session cookie is missing, invalid, expired, or revoked.
+- `401`: The session cookie or service API key is missing, invalid, expired,
+  or revoked.
 - `403`: Your identity does not have permission for the exact Namespace
   operation.
 - `404`: The Namespace does not exist, belongs outside the requested scope, or
@@ -196,6 +202,8 @@ workload is ready.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-06 18:40: Note that a reused existing namespace fails until its old tenant markers are cleared, that `failed` carries no reason, and that `401` covers service API keys. (dogfood-r38)
 
 - 2026-09-01 14:51: Document initial default Namespace creation and unchanged repeat-bootstrap behavior. (codex/01a05ef1-ee29-7941-80f2-448bb0789969 - 872fa544c98bb7ad11b2d92d777e49229ececbf5)
 

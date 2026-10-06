@@ -12,6 +12,7 @@ import {
   loginSecret as secret,
   redirectProviderFetch,
   startProviderServer,
+  testOversizedProviderBodies,
 } from "../helpers/human-login-transport.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
 
@@ -136,7 +137,8 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     const before = requests.length;
     await expectDenied(await fixture.callback(`state=${callbackState}&code=${"c".repeat(4097)}`));
     assert.equal(requests.length, before);
-    assert.deepEqual(fixture.denials, [["INVALID_ATTEMPT", "oidc"]]);
+    assert.deepEqual(fixture.denials, []);
+    assert.deepEqual(fixture.unmatched, ["oidc"]);
   });
 
   await t.test("tokens for another issuer, client or nonce are rejected", async () => {
@@ -166,6 +168,18 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     assert.deepEqual(fixture.operationalLogs(), [
       unavailableLog({ step: "token", cause: "redirect" }),
     ]);
+  });
+
+  await testOversizedProviderBodies(t, {
+    endpoints: [
+      ["/oauth/token", "token"],
+      ["/.well-known/jwks.json", "jwks"],
+    ],
+    serve: (handler) => {
+      serve = handler;
+    },
+    provider,
+    login: loginFixture,
   });
 
   await t.test("an unavailable JWKS logs one warning with the HTTP status", async () => {
