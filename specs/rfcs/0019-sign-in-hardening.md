@@ -1,18 +1,20 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 status_note: "Retroactive record. Every decision below is already implemented on main (PRs 2026-09-28 to 2026-10-01). It records those decisions for human review; it is not accepted, and review may reopen any of them."
 ---
 
 # Proposal: Human sign-in hardening
 
-- **ID:** RFC-0045
+- **ID:** RFC-0019
 - **Owner:** freeqaz (record). Auth design review: needed.
 - **Created:** 2026-10-01
 - **Last updated:** 2026-10-03
 - **Source baseline:** `main` at `521549dff`. Every symbol and number below was read there; rechecked at `04d01d02e`.
-- **Related:** [RFC 31](31-human-federated-sign-in/index.md) owns GitHub sign-in, the attempt,
+- **Related:** [RFC-0007](0007-human-federated-sign-in/index.md) owns GitHub sign-in, the attempt,
   receipt and session-key design, and the original sign-in admission section, which this record
-  supersedes for password and external sign-in. [RFC-0042](0042-oidc-sign-in.md) owns generic OIDC. Current
+  supersedes for password and external sign-in. [RFC-0001](0001-oidc-sign-in.md) owns generic OIDC. Current
   behavior: [authentication](../../docs/reference/authentication.md),
   [external sign-in](../../docs/reference/authentication/external-sign-in.md).
 
@@ -28,7 +30,7 @@ Password sign-in in both profiles uses one failure-counting limiter, keyed on em
 behind a trusted proxy) client address. Spent budgets pace attempts instead of dropping them.
 Administrators and the recovery account are paced, never refused by sequential guessing. A
 browser that signed in before gets its own lane through a known-device cookie. Operators can
-limit password sign-in to the recovery account. External sign-in keeps RFC 31's flow with
+limit password sign-in to the recovery account. External sign-in keeps RFC-0007's flow with
 tighter edges, and sessions from a removed or reconfigured provider end.
 
 ## Context
@@ -120,9 +122,9 @@ identity at a configured provider; it still starts.
 
 ### External sign-in invariants
 
-RFC 31 and RFC-0042 own the flow. These PRs tightened it:
+RFC-0007 and RFC-0001 own the flow. These PRs tightened it:
 
-- **Tab binding** ([#522](https://github.com/openclaw/openclaw-enterprise/pull/522), RFC 31
+- **Tab binding** ([#522](https://github.com/openclaw/openclaw-enterprise/pull/522), RFC-0007
   M2): a two-minute receipt cookie plus `attemptId` is exchanged once for a `sessionKey`, and
   `x-occ-session-key` can only narrow which cookie session a request uses.
 - **Receipt names its provider instance**
