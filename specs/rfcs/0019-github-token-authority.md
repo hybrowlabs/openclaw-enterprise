@@ -1,22 +1,24 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 ---
 
 # Proposal: GitHub token authority for local development
 
-- **ID:** RFC-0060
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal and credential-boundary review); repository-credentials
   maintainers for the common-owner change.
 - **Created:** 2026-10-04
 - **Last updated:** 2026-10-04
 - **RFC PR:** [#1196](https://github.com/openclaw/openclaw-enterprise/pull/1196)
 - **Implementation plan:** none; delivery is two pull requests, listed under Delivery.
-- **Related:** [RFC 31 repository credentials](31-repository-credentials/index.md) and its
-  [qualification](31-repository-credentials/qualification.md);
+- **Related:** [RFC-0008 repository credentials](0008-repository-credentials/index.md) and its
+  [qualification](0008-repository-credentials/qualification.md);
   [repository credential reference](../../docs/reference/repository-credentials.md);
   [push-ref guardrail](../../docs/reference/repository-credentials/push-ref-guardrail.md);
   [local repository credentials guide](../../docs/guides/deploy/local-repository-credentials.md);
-  [RFC 39 credential recovery](39-repository-credential-recovery.md).
+  [RFC-0015 credential recovery](0015-repository-credential-recovery.md).
 
 <a id="problem-and-decision"></a>
 
@@ -96,7 +98,7 @@ through `readProtectedFile` (owner, mode, no symlink, stable inode) and both zer
 source. The driver owns a session and is kind-agnostic: `source.bind(session)` returns
 `acquire` and `retire`; `cleanup` is `revocable` for the App and `expiry-only` for the token.
 Custody, lifecycle, sessions and transport remain the common owners they are in
-[RFC 31](31-repository-credentials/index.md).
+[RFC-0008](0008-repository-credentials/index.md).
 
 ### Configuration
 
@@ -256,7 +258,7 @@ authority; a lint in the configuration tests asserts the strings `github-token`,
 `developmentOnly` and `development-authority` are absent from `deploy/helm/**`,
 `deploy/examples/production/**` and the non-development standalone examples. (4) Grant identity
 is disjoint across kinds. The
-[qualification](31-repository-credentials/qualification.md) treats the token authority as an
+[qualification](0008-repository-credentials/qualification.md) treats the token authority as an
 explicitly selected custody variant, never the login/PAT fallback T6 forbids.
 
 ### Later phases, recorded here
@@ -273,7 +275,7 @@ explicitly selected custody variant, never the login/PAT fallback T6 forbids.
 
 ## Delivery and verification
 
-1. **PR A (this RFC).** `specs/rfcs/0060-github-token-authority.md` and its `specs/README.md`
+1. **PR A (this RFC).** `specs/rfcs/0019-github-token-authority.md` and its `specs/README.md`
    row. Human-gated; lands no code.
 2. **PR B (implementation).** Types, config validation, static owner, token-source seam,
    static acquisition, receive-pack inspector, route options, grant identity, lifecycle sweep
