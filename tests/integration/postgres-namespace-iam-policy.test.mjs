@@ -8,11 +8,7 @@ import {
 } from "../../packages/iam/src/index.ts";
 import { AuthorizationDeniedError, OpenClawController } from "../../packages/occ/src/index.ts";
 import { PostgresPlatformState } from "../../packages/occ/src/state/postgres-state.ts";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
 function identifier(kind) {
   return `${kind}_${randomUUID()}`;
@@ -313,7 +309,7 @@ test(
       state.transact((unit) =>
         iam.deleteNamespaceRole({ policy: unit.iamPolicy }, namespace.id, secretRole.id),
       ),
-      { name: "ResourceConflictError" },
+      { name: "IAMRoleInUseError" },
     );
     await state.transact(async (unit) => {
       assert.equal(
@@ -430,9 +426,13 @@ test(
           throw error;
         }
       }),
-      { name: "ScopeViolationError" },
+      { name: "IAMPolicyValidationError" },
     );
-    assert.equal(bindingError?.name, "ScopeViolationError", "State must reject the orphan subject");
+    assert.equal(
+      bindingError?.name,
+      "IAMPolicyValidationError",
+      "State must reject the orphan subject",
+    );
     assert.equal(
       (await state.read((unit) => unit.iamPolicy.listAccessBindings(namespace.id))).filter(
         (binding) => binding.subjectId === orphan,
@@ -547,10 +547,26 @@ test(
       createState.transact((unit) =>
         iam.createNamespaceAccessBinding(
           { policy: unit.iamPolicy },
-          { ...agentBinding, id: identifier("binding") },
+          { ...agentBinding, id: identifier("binding"), subjectId: principal.id },
         ),
       ),
-      /target does not belong to the exact Namespace/,
+      /target does not exist in this Namespace or is being deleted/,
+    );
+    // Deletion also removes bindings for the Agent's ServicePrincipal, so a deleting
+    // Agent's ServicePrincipal is no longer a bindable subject for any target.
+    await assert.rejects(
+      createState.transact((unit) =>
+        iam.createNamespaceAccessBinding(
+          { policy: unit.iamPolicy },
+          {
+            ...agentBinding,
+            id: identifier("binding"),
+            resourceKind: "secret",
+            resourceId: secret.id,
+          },
+        ),
+      ),
+      /the ServicePrincipal of a live Agent here/,
     );
 
     assert.equal(
@@ -635,7 +651,7 @@ test(
           },
         ),
       ),
-      { name: "ScopeViolationError" },
+      { name: "IAMPolicyValidationError" },
     );
   },
 );
@@ -787,7 +803,7 @@ test(
         state.transact((unit) =>
           iam.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input),
         ),
-        { name: "ScopeViolationError" },
+        { name: "IAMPolicyValidationError" },
       );
     }
 
@@ -982,7 +998,7 @@ test(
           },
         ),
       ),
-      { name: "ScopeViolationError", message: /support only Namespace read/ },
+      { name: "IAMPolicyValidationError", message: /support only Namespace read/ },
     );
     assert.deepEqual(
       await state.transact((unit) => unit.iamPolicy.listAccessBindings(namespace.id)),
@@ -1220,7 +1236,7 @@ test(
           },
         ),
       ),
-      { name: "ScopeViolationError" },
+      { name: "IAMPolicyValidationError" },
     );
     await assert.rejects(
       state.transact((unit) =>
@@ -1267,7 +1283,7 @@ test(
           },
         ),
       ),
-      { name: "ScopeViolationError" },
+      { name: "IAMPolicyValidationError" },
     );
   },
 );
