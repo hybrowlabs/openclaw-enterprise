@@ -1,17 +1,19 @@
 ---
 status: Proposed
+implementation_status: Implemented
+author: freeqaz
 ---
 
 # Proposal: GitHub organization and team allowlist for sign-in
 
-- **ID:** RFC-0061
+- **ID:** RFC-0019
 - **Owner:** freeqaz (proposal); authentication maintainers for the sign-in callback.
 - **Created:** 2026-10-04
 - **Last updated:** 2026-10-04
 - **RFC PR:** [#1229](https://github.com/openclaw/openclaw-enterprise/pull/1229)
 - **Implementation plan:** none; delivery is one pull request,
   [#1231](https://github.com/openclaw/openclaw-enterprise/pull/1231), listed under Delivery.
-- **Related:** [RFC 31 GitHub sign-in](31-human-federated-sign-in/index.md);
+- **Related:** [RFC-0007 GitHub sign-in](0007-human-federated-sign-in/index.md);
   [external sign-in reference](../../docs/reference/authentication/external-sign-in.md);
   [production settings](../../docs/reference/settings/production.md#github-sign-in-and-trusted-proxies);
   Google's hosted-domain allowlist (`OCC_AUTH_GOOGLE_ALLOWED_DOMAINS`), the nearest precedent.
