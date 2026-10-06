@@ -1,11 +1,13 @@
 ---
 status: Proposed
+implementation_status: Not implemented
+author: freeqaz
 status_note: "Needs human review before landing. No implementation accompanies this proposal."
 ---
 
 # Proposal: Truthful availability for the sandbox log source
 
-- **ID:** RFC-0055
+- **ID:** RFC-0019
 - **Owner:** Agent runtime logs (controller and OpenShell Sandbox Driver). Review: API
   contract owners.
 - **Created:** 2026-10-02
@@ -13,7 +15,7 @@ status_note: "Needs human review before landing. No implementation accompanies t
 - **RFC PR:** this PR (draft)
 - **Related:** dogfood finding D114; runtime log reads
   ([flow](../../docs/flows/agent-runtime-logs.md),
-  [guide](../../docs/guides/topics/agent-logs.md)); RFC-0048 (open PR #854) records the
+  [guide](../../docs/guides/topics/agent-logs.md)); RFC #854 (open) records the
   runtime log design.
 
 <a id="problem-and-decision"></a>
