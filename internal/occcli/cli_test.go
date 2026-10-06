@@ -323,13 +323,15 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 		{"agent", "logs", "agt_1", "--source", "gateway", "--level", "unknown"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "-o", "yaml"},
 		{"agent", "runtime", "agt_1", "-o", "text"},
+		{"agent", "logs", "agt_1", "--source", "gateway", "--revision", "3"},
+		{"agent", "runtime", "agt_1", "--revision", "my-deploy"},
 	} {
 		stub := &runtimeLogStub{t: t, activeID: "rev_1"}
 		if _, _, err := runLogsCommand(t, context.Background(), stub, args...); err == nil {
 			t.Errorf("%v: expected an error", args)
 		}
-		if len(stub.queries) != 0 {
-			t.Errorf("%v: sent %d log requests", args, len(stub.queries))
+		if len(stub.paths) != 0 {
+			t.Errorf("%v: sent requests %v", args, stub.paths)
 		}
 	}
 	stub := &runtimeLogStub{t: t}
@@ -663,6 +665,48 @@ func TestAgentStopNamesTheDeployCommandThatStartsTheAgentAgain(t *testing.T) {
 	}
 }
 
+func TestCredentialSourceListTableOmitsTheLiveGatewayStatusOnlyGetCarries(t *testing.T) {
+	source := `{"id":"cs_1","name":"openai","type":"openai","state":"ready"`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/namespaces/ns_1/credential-sources":
+			// The list API returns metadata only, never a live status.
+			_, _ = io.WriteString(w, `{"data":[`+source+`}],"meta":{"requestId":"req_1"}}`)
+		case "/namespaces/ns_1/credential-sources/cs_1":
+			_, _ = io.WriteString(w, `{"data":`+source+`,"status":{"state":"ready"}},"meta":{"requestId":"req_2"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	keyFile := filepath.Join(t.TempDir(), "service-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		args []string
+		rows [][]string
+	}{
+		{[]string{"list"}, [][]string{{"ID", "NAME", "TYPE", "STATE"}, {"cs_1", "openai", "openai", "ready"}}},
+		{[]string{"get", "cs_1"}, [][]string{{"ID", "NAME", "TYPE", "STATE", "GATEWAY", "STATUS"}, {"cs_1", "openai", "openai", "ready", "ready"}}},
+	} {
+		var out strings.Builder
+		command := New(&out, io.Discard)
+		command.SetArgs(append(append([]string{"credential-source"}, test.args...), "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"))
+		if err := command.Execute(); err != nil {
+			t.Fatalf("%v: %v", test.args, err)
+		}
+		var got [][]string
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			got = append(got, strings.Fields(line))
+		}
+		if !reflect.DeepEqual(got, test.rows) {
+			t.Errorf("%v table = %q, want %q", test.args, got, test.rows)
+		}
+	}
+}
+
 func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 	var followed bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -713,5 +757,33 @@ func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 				t.Fatalf("origin key = %q, redirect followed = %v", sawKey, followed)
 			}
 		})
+	}
+}
+
+func TestUnknownTopLevelCommandFailsInsteadOfPrintingHelp(t *testing.T) {
+	// Bare occ validates the global options, so keep the caller's OCC_* values out.
+	for _, name := range []string{"OCC_URL", "OCC_SERVICE_KEY_FILE", "OCC_CA_BUNDLE", "OCC_TIMEOUT_SECONDS", "OCC_NAMESPACE"} {
+		t.Setenv(name, "")
+	}
+	for _, args := range [][]string{{"presets", "list"}, {"agnet", "list"}} {
+		var out, errOut strings.Builder
+		command := New(&out, &errOut)
+		command.SetArgs(args)
+		err := command.Execute()
+		if want := fmt.Sprintf("unknown command %q for \"occ\"", args[0]); err == nil || err.Error() != want {
+			t.Fatalf("occ %v error = %v, want %q", args, err, want)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("occ %v stdout = %q, want nothing", args, out.String())
+		}
+	}
+	var out strings.Builder
+	command := New(&out, io.Discard)
+	command.SetArgs(nil)
+	if err := command.Execute(); err != nil {
+		t.Fatalf("bare occ error = %v", err)
+	}
+	if !strings.Contains(out.String(), "Available Commands:") {
+		t.Fatalf("bare occ stdout = %q, want help", out.String())
 	}
 }
