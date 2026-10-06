@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
 import { createHarnessConfiguration } from "../../tests/helpers/harness-configuration.mjs";
+import { createModelProbeCertificates } from "../../tests/helpers/runtime-model-probe-certificates.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const occ = join(root, "bin", "occ");
@@ -153,7 +154,7 @@ async function exportEnvironment(values) {
 // images
 
 function cacheArguments(role) {
-  // Restore only: the Images and Packaging lane owns the hosted cache exports.
+  // Restore only: main's cache is written by the warm workflow and main pushes.
   if (
     process.env.GITHUB_ACTIONS !== "true" ||
     !process.env.ACTIONS_RUNTIME_TOKEN ||
@@ -183,64 +184,7 @@ async function pushedDigest(tag) {
 async function createModelCertificates(directory) {
   await mkdir(directory, { recursive: true });
   const file = (name) => join(directory, name);
-  await run("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-days",
-    "2",
-    "-subj",
-    "/CN=oce-first-agent-smoke-ca",
-    "-addext",
-    "basicConstraints=critical,CA:TRUE",
-    "-addext",
-    "keyUsage=critical,keyCertSign",
-    "-keyout",
-    file("ca-key.pem"),
-    "-out",
-    file("ca.pem"),
-  ]);
-  await run("openssl", [
-    "req",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-subj",
-    "/CN=api.openai.com",
-    "-keyout",
-    file("key.pem"),
-    "-out",
-    file("leaf.csr"),
-  ]);
-  await writeFile(
-    file("leaf.ext"),
-    [
-      "subjectAltName=DNS:api.openai.com",
-      "basicConstraints=critical,CA:FALSE",
-      "extendedKeyUsage=serverAuth",
-      "keyUsage=critical,digitalSignature,keyEncipherment",
-      "",
-    ].join("\n"),
-  );
-  await run("openssl", [
-    "x509",
-    "-req",
-    "-in",
-    file("leaf.csr"),
-    "-CA",
-    file("ca.pem"),
-    "-CAkey",
-    file("ca-key.pem"),
-    "-CAcreateserial",
-    "-days",
-    "2",
-    "-extfile",
-    file("leaf.ext"),
-    "-out",
-    file("cert.pem"),
-  ]);
+  await createModelProbeCertificates({ directory, caName: "oce-first-agent-smoke-ca", run });
   await copyFile(
     join(root, "tests/fixtures/runtime-model-probe-endpoint.mjs"),
     file("endpoint.mjs"),
@@ -973,27 +917,6 @@ async function diagnostics(stack) {
   }
 }
 
-// Local Setup starts its k3d node with IPTABLES_MODE=legacy. On a host whose
-// Docker uses iptables-nft (the hosted Ubuntu 22.04 runner), the node's resolver
-// then refuses queries, so no image pulls and no Pod sandbox starts. Give the
-// node the host's upstream resolver, the documented Local Setup workaround
-// (OCC_DEVELOPMENT_K3D_DNS_RESOLVER), unless one is already selected.
-async function upstreamResolver() {
-  for (const path of ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"]) {
-    try {
-      const text = await readFile(path, "utf8");
-      for (const [, address] of text.matchAll(/^nameserver\s+(\d+\.\d+\.\d+\.\d+)\s*$/gm)) {
-        if (!address.startsWith("127.")) {
-          return address;
-        }
-      }
-    } catch {
-      // Try the next file.
-    }
-  }
-  return undefined;
-}
-
 async function smoke() {
   if (!process.env.OCC_FIRST_AGENT_SMOKE_MODEL_DIRECTORY) {
     try {
@@ -1017,13 +940,6 @@ async function smoke() {
     OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "900",
   };
   delete environment.OPENAI_API_KEY;
-  if (!environment.OCC_DEVELOPMENT_K3D_DNS_RESOLVER) {
-    const resolver = await upstreamResolver();
-    if (resolver) {
-      environment.OCC_DEVELOPMENT_K3D_DNS_RESOLVER = resolver;
-      log(`k3d node resolver: ${resolver}`);
-    }
-  }
   let stack;
   try {
     stack = await step("Local Setup (occ dev up)", () => startLocalSetup(environment));
