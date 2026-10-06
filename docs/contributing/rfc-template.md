@@ -5,6 +5,8 @@ the code fences, followed by the proposal scaffold. Replace the prompts with
 the actual decision. Allocate the number using the
 [specification process](specifications.md#files-and-numbering).
 If the RFC needs companion files, use `<number>-<topic>/index.md` instead.
+Replace `github-login` with the original RFC PR author's GitHub login (without `@`).
+The author is required; name responsible teams in the proposal where relevant.
 Adapt the headings to the change and remove sections that do not apply. See the
 [RFC process](rfcs.md) for review, length, and diagram guidance.
 
@@ -17,13 +19,14 @@ defined in the specification process.
 ```yaml
 ---
 status: Proposed
+implementation_status: Not implemented
+author: github-login
 ---
 ```
 
 # Proposal: [Decision or capability]
 
 - **ID:** RFC-[number]
-- **Owner:** [Responsible person or team]
 - **Created:** [YYYY-MM-DD]
 - **Last updated:** [YYYY-MM-DD]
 - **RFC PR:** [Review URL when available]
