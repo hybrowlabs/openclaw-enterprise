@@ -498,6 +498,7 @@ test("production native examples satisfy the current Helm, Installation, and PVC
   assert.deepEqual(drivers.defaultPresets.map(({ name }) => name).sort(), [
     "Standard Codex",
     "Standard OpenClaw",
+    "default-codex",
   ]);
   assert.equal(drivers.pluginDriver.id, "codex-plugin");
   assert.equal(drivers.pluginDriver.discoveryCredential, "none");
@@ -1577,6 +1578,10 @@ test(
   async () => {
     for (const [overrides, message] of [
       [{ "repositoryCredentials.image": "repository-credentials:latest" }, /immutable SHA-256/],
+      [
+        { "repositoryCredentials.image": `repository-credentials@sha256:${"B".repeat(64)}` },
+        /immutable SHA-256/,
+      ],
       [{ "repositoryCredentials.backendId": "" }, /backendId is required/],
       [{ "repositoryCredentials.registryConfigMapName": "" }, /registryConfigMapName is required/],
       [{ "repositoryCredentials.publicCaSecretName": "repository-tls" }, /dedicated Secret/],
@@ -1849,6 +1854,14 @@ test(
         assert.ok(!container.volumeMounts.some(({ name }) => name === "internal-admission"));
         assert.deepEqual(container.livenessProbe.httpGet, { path: "/healthz", port: "http" });
         assert.deepEqual(container.readinessProbe.httpGet, { path: "/readyz", port: "http" });
+        // A slow boot must not trip liveness: the startup probe holds liveness off for 2 min.
+        // Readiness waits for the first startup success, so a 1 s period lets the API take
+        // traffic about when it listens instead of at a later probe tick.
+        assert.deepEqual(container.startupProbe, {
+          httpGet: { path: "/healthz", port: "http" },
+          periodSeconds: 1,
+          failureThreshold: 120,
+        });
       } else {
         const readinessMount = container.volumeMounts.find(
           ({ name }) => name === "worker-readiness",
@@ -1858,11 +1871,21 @@ test(
           container.env.find(({ name }) => name === "OCC_WORKER_READINESS_PATH").value,
           `${readinessMount.mountPath}/ready`,
         );
+        // Liveness restarts a wedged run loop, so its progress marker must be writable too.
+        assert.equal(
+          container.env.find(({ name }) => name === "OCC_WORKER_LIVENESS_PATH").value,
+          `${readinessMount.mountPath}/alive`,
+        );
         assert.deepEqual(container.readinessProbe.exec.command, [
           "node",
           "scripts/production-healthcheck.mjs",
           "worker",
           "ready",
+        ]);
+        assert.deepEqual(container.livenessProbe.exec.command, [
+          "node",
+          "scripts/production-healthcheck.mjs",
+          "worker",
         ]);
       }
     }
@@ -2364,13 +2387,16 @@ test(
   },
 );
 
-test("GitHub sign-in egress defaults to HTTPS to any IPv4 address", tooling, async () => {
+test("GitHub sign-in egress defaults to HTTPS except link-local", tooling, async () => {
   const { apiEnv, egress } = await signInObjects(githubLoginValues);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, undefined);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, undefined);
   assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
   assert.deepEqual(egress.spec.egress, [
-    { to: [{ ipBlock: { cidr: "0.0.0.0/0" } }], ports: [{ protocol: "TCP", port: 443 }] },
+    {
+      to: [{ ipBlock: { cidr: "0.0.0.0/0", except: ["169.254.0.0/16"] } }],
+      ports: [{ protocol: "TCP", port: 443 }],
+    },
   ]);
 });
 
@@ -2470,6 +2496,21 @@ test(
         "GitHub sign-in with a /0 egress entry",
         { ...githubLoginValues, "auth.github.egressCidrs[0]": "0.0.0.0/0" },
         /prefixes 1 through 32/,
+      ],
+      [
+        "GitHub sign-in with an empty-string egress list",
+        { ...githubLoginValues, "auth.github.egressCidrs": "" },
+        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs; leave it unset, or set \[\] in a values file or with --set-json,/,
+      ],
+      [
+        "GitHub sign-in with an empty-string organization allowlist",
+        { ...githubLoginValues, "auth.github.allowedOrgs": "" },
+        /auth\.github\.allowedOrgs must be a list of GitHub organization logins/,
+      ],
+      [
+        "GitHub sign-in with an empty-string team allowlist",
+        { ...githubLoginValues, "auth.github.allowedTeams": "" },
+        /auth\.github\.allowedTeams must be a list of org\/team-slug entries/,
       ],
       [
         "GitHub sign-in sharing the Better Auth Secret",
@@ -2763,6 +2804,23 @@ test(
         render(override),
         ({ code, stderr }) => code !== 0 && stderr.length > 0,
         description,
+      );
+    }
+    // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other
+    // spellings at pull time. The uppercase algorithm was already refused; uppercase hex
+    // was not.
+    for (const image of [
+      `registry.example/controller@sha256:${"A".repeat(64)}`,
+      `registry.example/controller@SHA256:${"a".repeat(64)}`,
+    ]) {
+      await assert.rejects(
+        render({ "images.controller": image }),
+        ({ code, stderr }) =>
+          code !== 0 &&
+          stderr.includes(
+            "images.controller must be an approved immutable SHA-256 image reference",
+          ),
+        image,
       );
     }
   },
