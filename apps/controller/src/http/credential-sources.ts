@@ -1,10 +1,10 @@
 import type {
   CredentialSourceMetadata,
   CredentialSourceStatus,
-  CredentialWithdrawal,
+  CredentialWithdrawalStatus,
   SecretReference,
 } from "@openclaw-enterprise/contracts";
-import type { ResourceHandlers } from "./types.ts";
+import { removedAccessBindingDetails, type ResourceHandlers } from "./types.ts";
 
 function clientCredentialSource(
   source: Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>,
@@ -23,7 +23,7 @@ function clientCredentialSource(
 }
 
 function clientCredentialWithdrawal(
-  withdrawal: Readonly<CredentialWithdrawal>,
+  withdrawal: Readonly<CredentialWithdrawalStatus>,
 ): Record<string, unknown> {
   return {
     namespaceId: withdrawal.namespaceId,
@@ -36,6 +36,7 @@ function clientCredentialWithdrawal(
     ...(withdrawal.completedAt === undefined ? {} : { completedAt: withdrawal.completedAt }),
     ...(withdrawal.lastReason === undefined ? {} : { reason: withdrawal.lastReason }),
     ...(withdrawal.lastAttemptAt === undefined ? {} : { lastAttemptAt: withdrawal.lastAttemptAt }),
+    withdrawalInProgress: withdrawal.withdrawalInProgress,
   };
 }
 
@@ -136,8 +137,15 @@ export const credentialSourceHandlers = {
   async deleteCredentialSource({ controller, context, reply, params, namespaceId, mutationEvent }) {
     // Deletion commits in two steps around the gateway call; the audit commits with the removal.
     const credentialSourceId = params.credentialSourceId as string;
-    await controller.deleteCredentialSource(context.actorId, namespaceId, credentialSourceId, () =>
-      mutationEvent({ kind: "credential_source", id: credentialSourceId, namespaceId }),
+    await controller.deleteCredentialSource(
+      context.actorId,
+      namespaceId,
+      credentialSourceId,
+      (removed) =>
+        mutationEvent(
+          { kind: "credential_source", id: credentialSourceId, namespaceId },
+          removedAccessBindingDetails(removed),
+        ),
     );
     reply.status(204).send();
   },

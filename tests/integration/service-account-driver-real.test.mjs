@@ -1,4 +1,3 @@
-import { kubernetesGatewayNamespaceName } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -217,7 +216,7 @@ test(
       if (observerPool !== undefined) {
         await cleanup(() => observerPool.end());
       }
-      if (gatewayRuntimeNamespace !== undefined) {
+      if (gatewayRuntimeNamespace !== undefined && gatewayRuntimeNamespace !== tenantNamespace) {
         await kubectl(
           "delete",
           "namespace",
@@ -438,7 +437,7 @@ test(
     assertControllerStatus(createdNamespace, 201);
     const namespaceId = createdNamespace.data.id;
     tenantNamespace = kubernetesNamespaceName(namespaceId);
-    gatewayRuntimeNamespace = kubernetesGatewayNamespaceName(createdNamespace.data.id);
+    gatewayRuntimeNamespace = kubernetesNamespaceName(createdNamespace.data.id);
     gatewayPlacement = gatewayRuntimeNamespace;
     await waitFor(`the worker to create ${tenantNamespace}`, async () => {
       try {
@@ -470,60 +469,16 @@ test(
       `--clusterrole=oce-sa-driver-secrets-${suffix}`,
       `--serviceaccount=${platformNamespace}:${api.account}`,
     );
-    await waitFor(`Gateway runtime namespace ${gatewayRuntimeNamespace}`, async () => {
-      try {
-        return await kubernetesResource("namespace", gatewayRuntimeNamespace);
-      } catch (error) {
-        if (/NotFound|not found/i.test(error.stderr ?? error.message)) {
-          return undefined;
-        }
-        throw error;
-      }
-    });
-    for (const role of [`oce-sa-driver-tenant-${suffix}`, `oce-sa-driver-secrets-${suffix}`]) {
-      await kubectl(
-        "create",
-        "rolebinding",
-        `${role}-api`,
-        "--namespace",
-        gatewayRuntimeNamespace,
-        `--clusterrole=${role}`,
-        `--serviceaccount=${platformNamespace}:${api.account}`,
-      );
-    }
-    for (const [role, target] of [
-      [`oce-sa-driver-tenant-${suffix}`, gatewayRuntimeNamespace],
-      [`oce-sa-driver-secrets-${suffix}`, gatewayRuntimeNamespace],
-      [`oce-sa-driver-secrets-${suffix}`, tenantNamespace],
-    ]) {
-      await kubectl(
-        "create",
-        "rolebinding",
-        `${role}-worker`,
-        "--namespace",
-        target,
-        `--clusterrole=${role}`,
-        `--serviceaccount=${platformNamespace}:${workerIdentity.account}`,
-      );
-    }
-    for (const [identity, expected] of [
-      [api, "yes"],
-      [workerIdentity, "yes"],
-    ]) {
-      for (const verb of ["get", "create"]) {
-        const access = await kubectl(
-          "auth",
-          "can-i",
-          verb,
-          "secrets",
-          "--namespace",
-          tenantNamespace,
-          `--as=system:serviceaccount:${platformNamespace}:${identity.account}`,
-        ).catch(({ stdout }) => stdout);
-        assert.equal(access.trim(), expected, `the ${identity.account} Secret ${verb} boundary`);
-      }
-    }
-
+    // Worker delivery and API custody remain separate identities in the shared target.
+    await kubectl(
+      "create",
+      "rolebinding",
+      "service-account-driver-worker-secrets",
+      "--namespace",
+      tenantNamespace,
+      `--clusterrole=oce-sa-driver-secrets-${suffix}`,
+      `--serviceaccount=${platformNamespace}:${workerIdentity.account}`,
+    );
     await waitFor(`the worker to provision ${tenantNamespace}`, async () => {
       const response = await request("GET", `/namespaces/${namespaceId}`);
       assertControllerStatus(response, 200);
@@ -663,6 +618,7 @@ test(
     assert.deepEqual(authenticationPolicy.spec.egress[0].ports, [{ protocol: "TCP", port: 443 }]);
     assert.deepEqual(authenticationPolicy.spec.egress[0].to[0].ipBlock.except, [
       "10.0.0.0/8",
+      "100.64.0.0/10",
       "172.16.0.0/12",
       "192.168.0.0/16",
       "169.254.0.0/16",
@@ -679,7 +635,7 @@ test(
     const pods = await waitFor("separate real ready OpenClaw and Codex Pods", async () => {
       const items = (
         await Promise.all(
-          [tenantNamespace, gatewayPlacement].map(
+          [tenantNamespace].map(
             async (target) =>
               JSON.parse(await kubectl("get", "pods", "--namespace", target, "-o", "json")).items,
           ),
