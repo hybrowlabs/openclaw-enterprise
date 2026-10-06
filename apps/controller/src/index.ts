@@ -7,6 +7,7 @@ import {
   AgentRuntimeLogsResponse,
   AgentRuntimeResponse,
   CredentialSourceResponse,
+  ErrorDetail as ErrorDetailSchema,
   ErrorResponse,
   JsonValue,
   occApiRoutes,
@@ -48,6 +49,7 @@ import {
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  ComputeProvisioningRefusedError,
   createRuntimeLogCursorCodec,
   DependencyUnavailableError,
   DeviceAuthorizationStartError,
@@ -60,6 +62,7 @@ import {
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
+import SerializerSelector from "@fastify/fast-json-stringify-compiler";
 import ajvFormats from "ajv-formats";
 import Fastify, {
   LogController,
@@ -94,6 +97,7 @@ import { configurationHandlers } from "./http/configurations.ts";
 import { credentialSourceHandlers } from "./http/credential-sources.ts";
 import {
   canonicalFailure,
+  cappedPath,
   dependencyUnavailable,
   failure,
   isAuthorizationDenied,
@@ -102,6 +106,7 @@ import {
   RequestFailure,
   requestFailure,
   responseHeaders,
+  unstorableTextFailure,
   type ErrorDetail,
 } from "./http/errors.ts";
 import { iamHandlers } from "./http/iam.ts";
@@ -152,6 +157,11 @@ export interface ControllerAppOptions {
   readonly workspaceFileRequestTimeoutMs?: number;
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
+  /**
+   * How often a native admin WebSocket rechecks its admission (default 25 s). The server
+   * leaves it unset; tests shorten it so revocation closes do not wait the full interval.
+   */
+  readonly nativeAdminWebSocketLeaseIntervalMs?: number;
   /** Absent or disabled: both runtime routes answer 501. */
   readonly agentRuntimeLogs?: AgentRuntimeLogsConfig;
   readonly publicOrigin?: string;
@@ -207,6 +217,10 @@ const DEFAULT_BODY_LIMIT = 64 * 1024;
 const AGENT_CREATE_BODY_LIMIT = 448 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT = 48 * 1024;
 const WORKSPACE_FILE_CONTENT_LIMIT = 16 * 1024;
+// Path parameters such as IAM Role and AccessBinding IDs hold up to 200 characters (code
+// points). The router compares a parameter's decoded UTF-16 length, so 200 characters need
+// at most 400 units; its default of 100 refused contract-valid IDs before any handler ran.
+const MAX_PATH_PARAMETER_LENGTH = 400;
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const RESOURCE_ID_PREFIX = {
@@ -229,6 +243,61 @@ const RESOURCE_ID = Object.fromEntries(
 
 function formatsPlugin(ajv: Parameters<typeof ajvFormats.default>[0]) {
   return ajvFormats.default(ajv);
+}
+
+// Fastify compiles one response serializer per route and status code, and rebuilds its
+// serializer factory for every route in a plugin that added shared schemas; each
+// fast-json-stringify build then re-validates every shared schema. That was about 1,100
+// builds (830 of them the same ErrorResponse reference) and most of the API's boot at the
+// chart's 500m CPU limit. A serializer depends only on its schema, the shared schemas and
+// the serializer options, so build each distinct combination once.
+function cachedResponseSerializers(): SerializerSelector.SerializerFactory {
+  const buildSerializerCompiler = SerializerSelector();
+  const sharedSchemaIds = new WeakMap<object, number>();
+  // Never pruned. That is safe only while every serializer is built at route registration,
+  // a fixed set. Compiling per request (reply.compileSerializationSchema or serializeInput
+  // with a schema assembled at request time) would grow this Map without bound; such a
+  // route must set its own serializerCompiler.
+  const serializers = new Map<string, SerializerSelector.Serializer>();
+  let nextSharedSchemaId = 0;
+  const sharedSchemaId = (schema: object) => {
+    let id = sharedSchemaIds.get(schema);
+    if (id === undefined) {
+      id = nextSharedSchemaId++;
+      sharedSchemaIds.set(schema, id);
+    }
+    return id;
+  };
+  return (externalSchemas, options) => {
+    const compile = buildSerializerCompiler(externalSchemas, options);
+    const sharedSchemas = Object.entries((externalSchemas ?? {}) as Record<string, unknown>);
+    // Shared schemas are keyed by object identity in a WeakMap; a context with any shared
+    // schema that is not a plain object compiles uncached instead.
+    if (sharedSchemas.some(([, schema]) => typeof schema !== "object" || schema === null)) {
+      return compile;
+    }
+    // Fastify passes the same stored schema objects each time; identity names the set.
+    const shared = sharedSchemas
+      .map(([id, schema]) => `${id}=${sharedSchemaId(schema as object)}`)
+      .join(",");
+    const prefix = `${JSON.stringify(options ?? {})}|${shared}|`;
+    // Route schemas are fixed at registration. A schema JSON cannot express (a cycle or a
+    // BigInt keyword) compiles uncached rather than failing registration here.
+    return (route) => {
+      let key: string;
+      try {
+        key = prefix + JSON.stringify(route.schema);
+      } catch {
+        return compile(route);
+      }
+      let serializer = serializers.get(key);
+      if (serializer === undefined) {
+        serializer = compile(route);
+        serializers.set(key, serializer);
+      }
+      return serializer;
+    };
+  };
 }
 
 function ipv4(value: string): number | undefined {
@@ -313,7 +382,7 @@ function validAuthorizationEvidence(value: unknown): value is AuthorizationEvide
 function validateConfiguration(value: unknown, depth = 0, path = ""): void {
   if (depth > 24) {
     throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
-      { path, code: "TOO_DEEP" },
+      { path: cappedPath(path), code: "TOO_DEEP" },
     ]);
   }
   if (value === null || typeof value !== "object") {
@@ -328,7 +397,7 @@ function validateConfiguration(value: unknown, depth = 0, path = ""): void {
   for (const [key, entry] of Object.entries(value)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") {
       throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
-        { path: `${path}/${jsonPointer(key)}`, code: "INVALID_VALUE" },
+        { path: cappedPath(`${path}/${jsonPointer(key)}`), code: "INVALID_VALUE" },
       ]);
     }
     validateConfiguration(entry, depth + 1, `${path}/${jsonPointer(key)}`);
@@ -910,6 +979,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   if (!Number.isSafeInteger(workspaceFileRequestTimeoutMs) || workspaceFileRequestTimeoutMs < 1) {
     throw new Error("The workspace file request timeout must be a positive integer.");
   }
+  const nativeAdminWebSocketLeaseIntervalMs = options.nativeAdminWebSocketLeaseIntervalMs;
+  if (
+    nativeAdminWebSocketLeaseIntervalMs !== undefined &&
+    (!Number.isSafeInteger(nativeAdminWebSocketLeaseIntervalMs) ||
+      nativeAdminWebSocketLeaseIntervalMs < 1)
+  ) {
+    throw new Error("The native admin WebSocket lease interval must be a positive integer.");
+  }
   let publicOrigin: string | undefined;
   if (options.publicOrigin !== undefined) {
     try {
@@ -944,10 +1021,48 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     trustProxy: false,
     requestIdHeader: false,
     genReqId: () => `req_${randomUUID()}`,
+    routerOptions: { maxParamLength: MAX_PATH_PARAMETER_LENGTH },
+    // Router failures happen before routing, so no hook or error handler runs; without this
+    // Fastify answers its own body (echoing the path) with no request ID or security headers.
+    frameworkErrors: (error, request, reply) => {
+      const mapped =
+        error.code === "FST_ERR_BAD_URL"
+          ? failure(400, "INVALID_REQUEST", "The request path has a malformed percent-encoding.")
+          : error.code === "FST_ERR_MAX_PARAM_LENGTH"
+            ? failure(
+                400,
+                "INVALID_REQUEST",
+                "The request does not match the operation contract: a path parameter is too long.",
+              )
+            : // FST_ERR_ASYNC_CONSTRAINT; this app registers no async route constraints.
+              failure(500, "INTERNAL_ERROR", "The platform request could not be completed.");
+      // No hook runs for these, so record them as the onResponse hook records other requests,
+      // with no measured duration.
+      options.metrics?.observeHttp("unmatched", request.method, mapped.status, 0);
+      options.logger?.info({
+        event: "http.completed",
+        requestId: request.id,
+        method: request.method,
+        route: "unmatched",
+        status: mapped.status,
+      });
+      canonicalFailure(reply, mapped);
+    },
     ajv: {
-      customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false },
+      // `verbose` attaches each failure's schema and value, so contract errors can tell which
+      // shape of a discriminated union a request chose (http/errors.ts). Neither is logged or
+      // returned: problems name only paths and the schema's accepted values, and http/errors.ts
+      // drops both from the error once its problems are built. An onError hook runs before
+      // that, so none may log `error.validation`.
+      customOptions: {
+        removeAdditional: false,
+        coerceTypes: false,
+        useDefaults: false,
+        verbose: true,
+      },
       plugins: [formatsPlugin],
     },
+    schemaController: { compilersFactory: { buildSerializer: cachedResponseSerializers() } },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   // Shutdown (app.close) drains admitted requests, but Node and Fastify close only the
@@ -1407,6 +1522,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     auth: options.auth,
     nativeAdmin: options.nativeAdmin,
     nativeAdminGatewayApiKey: options.nativeAdminGatewayApiKey,
+    webSocketLeaseIntervalMs: nativeAdminWebSocketLeaseIntervalMs,
     auditSink: options.auditSink,
   });
 
@@ -1472,7 +1588,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       operation.operationId !== "listAgentRepositoryOptions" &&
       operation.operationId !== "getAgentDeploymentRuntimeLogs"
     ) {
-      throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+      throw failure(
+        400,
+        "INVALID_REQUEST",
+        "The request does not match the operation contract: this operation accepts no query parameters.",
+      );
     }
     for (const [parameter, pattern] of Object.entries(RESOURCE_ID)) {
       if (
@@ -2272,7 +2392,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           throw failure(
             400,
             "INVALID_REQUEST",
-            "The request does not match the operation contract.",
+            "The request does not match the operation contract: querystring /cursor cannot be combined with /download; a download always starts a new view.",
+            [{ path: "/cursor", code: "INVALID_VALUE" }],
           );
         }
         const page = await controller!.readAgentRuntimeLogs(
@@ -2347,7 +2468,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           type: "object",
           additionalProperties: false,
           required: ["code", "message"],
-          properties: { code: { type: "string" }, message: { type: "string" } },
+          properties: {
+            code: { type: "string" },
+            message: { type: "string" },
+            // Schema 400s point at the rejected field; without this the serializer drops it.
+            details: { type: "array", maxItems: 32, items: ErrorDetailSchema },
+          },
         },
         meta,
       },
@@ -2357,6 +2483,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       401: { description: "Unauthorized", ...error },
       503: { description: "Service Unavailable", ...error },
     });
+    // Every route that reads a body answers an oversized one 413 and a non-JSON one 415.
+    const bodyErrors = {
+      413: { description: "Payload Too Large", ...error },
+      415: { description: "Unsupported Media Type", ...error },
+    };
     const accountBody = (
       createAuthAccountOperation.schema as {
         readonly body: { readonly properties: Record<string, unknown> };
@@ -2449,6 +2580,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
             409: { description: "Conflict", ...error },
+            ...(creating ? bodyErrors : {}),
           },
         } as DocumentedFastifySchema,
         onRequest: async (request) => admit(request, operation),
@@ -2462,10 +2594,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             throw failure(409, "RESOURCE_CONFLICT", "Bootstrap the Installation first.");
           }
           if (!creating && request.body !== undefined) {
+            // The same wording as OCC's operations that take no body.
             throw failure(
               400,
               "INVALID_REQUEST",
-              "The request does not match the operation contract.",
+              "The request does not match the operation contract: this operation accepts no request body.",
             );
           }
           const { selected, target, decision } = await requireInstallationAdmin(
@@ -2728,6 +2861,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
             },
             response: {
+              // A body without the exact attemptId fails the schema.
+              400: { description: "Bad Request", ...error },
               ...responses({
                 type: "object",
                 additionalProperties: false,
@@ -2735,6 +2870,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 properties: { sessionKey: { type: "string" } },
               }),
               403: { description: "Forbidden", ...error },
+              ...bodyErrors,
             },
           },
         },
@@ -3006,9 +3142,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 required: ["userId"],
                 properties: { userId: { type: "string" } },
               }),
+              400: { description: "Bad Request", ...error },
               403: { description: "Forbidden", ...error },
               404: { description: "Not Found", ...error },
               409: { description: "Conflict", ...error },
+              ...bodyErrors,
             },
           },
           onRequest: async (request) => admit(request, operation),
@@ -3159,9 +3297,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               required: [...recoveryResponse.required, "changed"],
               properties: { ...recoveryResponse.properties, changed: { type: "boolean" } },
             }),
+            400: { description: "Bad Request", ...error },
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
             409: { description: "Conflict", ...error },
+            ...bodyErrors,
           },
         },
         onRequest: async (request) => admit(request, recoveryReplaceOperation),
@@ -3314,6 +3454,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             },
           },
           response: {
+            // A browser Origin other than the console's, or a cross-site fetch, is refused
+            // before the credentials are read.
+            403: { description: "Forbidden", ...error },
             ...responses({
               type: "object",
               additionalProperties: false,
@@ -3323,7 +3466,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 sessionKey: { type: "string" },
               },
             }),
+            400: { description: "Bad Request", ...error },
             429: { description: "Too Many Requests", ...error },
+            ...bodyErrors,
           },
         },
       },
@@ -3338,7 +3483,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           description: "Revokes the current user session cookie.",
           tags: ["Authentication"],
           security: [{ sessionCookie: [] }],
-          response: responses({ type: "object", additionalProperties: true }),
+          response: {
+            ...responses({ type: "object", additionalProperties: true }),
+            // A missing or foreign browser Origin, or a cross-site fetch.
+            403: { description: "Forbidden", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.signOut(request, reply),
@@ -3406,6 +3555,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             400: { description: "Bad Request", ...error },
             403: { description: "Forbidden", ...error },
             409: { description: "Conflict", ...error },
+            ...bodyErrors,
           },
         },
         onRequest: async (request) => admit(request, createAuthAccountOperation),
@@ -3575,8 +3725,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             throw failure(
               400,
               "INVALID_REQUEST",
-              "The request does not match the operation contract.",
+              "The request does not match the operation contract: this operation accepts no request body.",
             );
+          }
+          const unstorable =
+            unstorableTextFailure("params", request.params) ??
+            unstorableTextFailure("body", request.body);
+          if (unstorable !== undefined) {
+            throw unstorable;
           }
         },
         preHandler: async (request) => resolveIdentity(request, operation),
@@ -3694,6 +3850,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         kubernetesNamespace: error.kubernetesNamespace,
         plane: error.plane,
         kubernetesStatus: error.status,
+      });
+    }
+    if (error instanceof ComputeProvisioningRefusedError) {
+      // The response keeps fixed text, because the Compute Driver's reason can name
+      // Installation gateway or routing settings; the operator finds it here by request ID.
+      app.log.warn({
+        event: "agent_provisioning.compute_refused",
+        requestId: request.id,
+        route: request.routeOptions.url ?? "unmatched",
+        reason: error.reason,
       });
     }
     if (error instanceof DeviceAuthorizationStartError) {

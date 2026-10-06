@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
+import { createRequire } from "node:module";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
@@ -11,6 +12,7 @@ import { OpenShellAdmissionLimitError } from "../../apps/controller/src/drivers/
 import {
   ActivationFailedError,
   ActivationPendingError,
+  DependencyUnavailableError,
   PostgresMetricsSnapshot,
   SandboxRevisionUnsupportedError,
   TransientDependencyError,
@@ -29,15 +31,38 @@ import {
 } from "../helpers/postgres-backend-state.mjs";
 import { waitFor } from "../helpers/wait-for.mjs";
 
+// Each test owns a database (Work claims span one), copied from one migrated template
+// per file rather than migrated again. Nothing connects to the template itself. A failed
+// template preparation is not cached: the next test retries it, and cleanup ignores it.
+let template;
+after(async () => {
+  await (await template?.catch(() => undefined))?.cleanup();
+});
+
+// The worker emits worker.completed after its queue transaction commits, so another
+// connection can see the committed Work state first. Wait for the event instead of
+// reading the event list once.
+function completion(events, description, predicate) {
+  return waitFor(description, async () => events.find(predicate));
+}
+
 async function prepareDatabase(context) {
   assert.ok(
     process.env.OPENCLAW_ENTERPRISE_CI_STATE,
     "Worker tests require an owned PostgreSQL fixture; see docs/testing/postgresql.md.",
   );
-  const prepared = await prepareFile({
+  const fixture = {
     lane: "postgres-application",
     file: fileURLToPath(import.meta.url),
     statePath: process.env.OPENCLAW_ENTERPRISE_CI_STATE,
+  };
+  template ??= prepareFile(fixture).catch((error) => {
+    template = undefined;
+    throw error;
+  });
+  const prepared = await prepareFile({
+    ...fixture,
+    template: (await template).env.OCC_TEST_DATABASE_URL,
   });
   const pools = new Set();
   const workers = new Set();
@@ -2909,13 +2934,13 @@ test(
         preparingReplacement ? true : undefined,
       );
       assert.equal((await fixture.work(stop, "succeeded")).attempt_count, 1);
-      assert.ok(
-        events.some(
-          ({ event, workId, code }) =>
-            event === "worker.completed" &&
-            workId === stop.idempotencyKey &&
-            code === "STOP_SUPERSEDED",
-        ),
+      await completion(
+        events,
+        "the stop's STOP_SUPERSEDED completion",
+        ({ event, workId, code }) =>
+          event === "worker.completed" &&
+          workId === stop.idempotencyKey &&
+          code === "STOP_SUPERSEDED",
       );
       assert.deepEqual(stopped, []);
       assert.equal(
@@ -3947,8 +3972,16 @@ test(
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
     // Stop work must retain its own bounded kind and committed retry/success
-    // outcomes after integrating stop support with metrics instrumentation.
-    const exposition = await metrics.exposition();
+    // outcomes after integrating stop support with metrics instrumentation. Both
+    // are recorded after the stop commits, the attempt outcome last.
+    const exposition = await waitFor("the stop's successful attempt metric", async () => {
+      const text = await metrics.exposition();
+      return /occ_reconciliation_attempts_total\{[^\n]*work_kind="agent_stop"[^\n]*outcome="success"/.test(
+        text,
+      )
+        ? text
+        : undefined;
+    });
     assert.match(
       exposition,
       /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 1(?:\n|$)/,
@@ -3960,7 +3993,7 @@ test(
       assert.match(
         exposition,
         new RegExp(
-          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1`,
+          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1(?:\\n|$)`,
         ),
       );
     }
@@ -5812,13 +5845,13 @@ test(
     );
     assert.equal(current.activeRevisionId, revision.id);
     assert.equal(current.desiredRuntimeState, "stopped");
-    assert.ok(
-      events.some(
-        ({ event, code, revisionId }) =>
-          event === "worker.completed" &&
-          code === "REVISION_MAINTENANCE_SUPERSEDED" &&
-          revisionId === revision.id,
-      ),
+    await completion(
+      events,
+      "the maintenance's REVISION_MAINTENANCE_SUPERSEDED completion",
+      ({ event, code, revisionId }) =>
+        event === "worker.completed" &&
+        code === "REVISION_MAINTENANCE_SUPERSEDED" &&
+        revisionId === revision.id,
     );
   },
 );
@@ -6567,6 +6600,20 @@ test(
     );
 
     await Promise.all([fixture.work(newer, "succeeded"), fixture.work(older, "succeeded")]);
+    // The deploy duration is observed just before the newer revision's completion
+    // event; the older retry's supersession completes without a deploy observation.
+    await completion(
+      events,
+      "the newer revision's successful completion",
+      ({ event, workId, outcome }) =>
+        event === "worker.completed" && workId === newer.idempotencyKey && outcome === "success",
+    );
+    await completion(
+      events,
+      "the older revision's REVISION_SUPERSEDED completion",
+      ({ event, code, revisionId }) =>
+        event === "worker.completed" && code === "REVISION_SUPERSEDED" && revisionId === older.id,
+    );
     assert.match(
       await metrics.exposition(),
       /occ_agent_operation_duration_seconds_count\{[^\n]*operation="deploy"[^\n]*\} 1(?:\n|$)/,
@@ -6598,12 +6645,6 @@ test(
         reason_code: "REVISION_SUPERSEDED",
       },
     ]);
-    assert.ok(
-      events.some(
-        ({ event, code, revisionId }) =>
-          event === "worker.completed" && code === "REVISION_SUPERSEDED" && revisionId === older.id,
-      ),
-    );
   },
 );
 
@@ -6942,6 +6983,72 @@ test(
     const old = await delays[seen];
     Date.now = realNow;
     assert.ok(old > 4_500 && old <= 5_000, `an old deployment rechecks in 5 s (${old} ms)`);
+  },
+);
+
+test(
+  "the revision worker emits bounded Driver diagnostics for failed Compute preparation",
+  requiresPostgres,
+  async (context) => {
+    const events = [];
+    const fixture = await setup(context, { maxAttempts: 1 });
+    const owner = await fixture.agent("compute-preparation-diagnostic");
+    const candidate = await fixture.revision(owner, 1);
+    const failure = new Error("opaque provider response that must not be logged");
+
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          if (revision.id === candidate.id) {
+            throw failure;
+          }
+          return fixture.compute.prepareRevision(revision);
+        },
+        describePrepareRevisionFailure(error) {
+          assert.equal(error, failure);
+          return {
+            code: "KUBERNETES_API_REJECTED",
+            stage: "gateway_deployment",
+            errorClass: "KubernetesApiError",
+            message: "The Kubernetes API rejected revision preparation.",
+            status: 422,
+          };
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(candidate, "failed_permanent");
+    await completion(
+      events,
+      "the failed preparation's completion",
+      (event) =>
+        event.event === "worker.completed" &&
+        event.revisionId === candidate.id &&
+        event.code === "DEPENDENCY_UNAVAILABLE" &&
+        event.outcome === "retry",
+    );
+    const diagnostic = events.find(
+      (event) =>
+        event.event === "worker.compute-prepare-failed" && event.revisionId === candidate.id,
+    );
+    assert.deepEqual(diagnostic, {
+      event: "worker.compute-prepare-failed",
+      workId: candidate.idempotencyKey,
+      attempt: 1,
+      operation: "agent_revision.reconcile",
+      namespaceId: fixture.namespace.id,
+      agentId: owner.id,
+      revisionId: candidate.id,
+      computeDriverId: fixture.compute.id,
+      code: "KUBERNETES_API_REJECTED",
+      step: "gateway_deployment",
+      errorClass: "KubernetesApiError",
+      message: "The Kubernetes API rejected revision preparation.",
+      status: 422,
+    });
+    assert.equal(JSON.stringify(events).includes(failure.message), false);
   },
 );
 
@@ -7366,7 +7473,7 @@ test(
         observations += 1;
         throw new SandboxRevisionUnsupportedError(
           "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
-          "OpenShell v0.1.3-pre.1 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
+          "OpenShell v0.1.3-pre.2 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
         );
       },
     });
@@ -7594,6 +7701,108 @@ test(
   },
 );
 
+test(
+  "an activation pass that a failed private Secret write ends logs the API status and reason",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("activation-private-write-status");
+    const candidate = await fixture.revision(owner, 1);
+    const events = [];
+    let activations = 0;
+    const { ApiException } = createRequire(
+      new URL("../../apps/controller/package.json", import.meta.url),
+    )("@kubernetes/client-node");
+
+    // The Kubernetes Driver writes a revision's private Secrets on activation too. When the
+    // API server refuses such a write, it raises its own DependencyUnavailableError rather
+    // than the client error, whose message and body echo the Secret, and keeps only the HTTP
+    // status and Status reason as the cause. tests/conformance/kubernetes-compute.test.mjs
+    // pins that Driver shape; this case proves the worker's side: its log must carry that
+    // status and reason, not only the class. A 429 or 5xx answer is transient instead and
+    // keeps the same evidence as its cause. Any other 4xx client error, which the Driver
+    // passes on unchanged, carries the status in its own code.
+    const refused = new DependencyUnavailableError(
+      "Workspace setup private delivery is unavailable.",
+    );
+    refused.cause = Object.assign(new Error("The Kubernetes API answered HTTP 403 (Forbidden)."), {
+      code: 403,
+      reason: "Forbidden",
+    });
+    const unavailable = new TransientDependencyError(
+      "kubernetes_api",
+      "unavailable",
+      "The Kubernetes API answered HTTP 503.",
+      {
+        cause: Object.assign(
+          new Error("The Kubernetes API answered HTTP 503 (ServiceUnavailable)."),
+          { code: 503, reason: "ServiceUnavailable" },
+        ),
+      },
+    );
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async activateRevision(revision, revisionContext) {
+          activations += 1;
+          if (activations === 1) {
+            throw refused;
+          }
+          if (activations === 2) {
+            throw unavailable;
+          }
+          if (activations === 3) {
+            throw new ApiException(409, "conflict", "{}", {});
+          }
+          return fixture.compute.activateRevision?.(revision, revisionContext);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(activations, 4);
+    const pending = events.filter(
+      (event) =>
+        event.event === "worker.completed" &&
+        event.revisionId === candidate.id &&
+        event.outcome === "pending",
+    );
+    assert.deepEqual(
+      pending.map(({ code, dependency, cause, status, reason }) => ({
+        code,
+        dependency,
+        cause,
+        status,
+        reason,
+      })),
+      [
+        {
+          code: "REVISION_FINALIZATION_INCOMPLETE",
+          dependency: undefined,
+          cause: "DependencyUnavailableError",
+          status: 403,
+          reason: "Forbidden",
+        },
+        {
+          code: "KUBERNETES_API_UNAVAILABLE",
+          dependency: "kubernetes_api",
+          cause: "unavailable",
+          status: 503,
+          reason: "ServiceUnavailable",
+        },
+        {
+          code: "REVISION_FINALIZATION_INCOMPLETE",
+          dependency: undefined,
+          cause: "ApiException",
+          status: 409,
+          reason: undefined,
+        },
+      ],
+    );
+  },
+);
+
 // D381 follow-up: a dedicated Gateway that refuses its own in-Pod CLI as unauthorized
 // can never apply its workspace node for this revision, so activation must fail the
 // deployment with a named code instead of staying pending until the convergence
@@ -7653,6 +7862,14 @@ for (const pendingPasses of [0, 1]) {
         message:
           "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.",
       });
+      await completion(
+        events,
+        "the refused activation's terminal completion",
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.id &&
+          event.outcome === "permanent",
+      );
       const last = events
         .filter((event) => event.event === "worker.completed" && event.revisionId === candidate.id)
         .at(-1);
@@ -7701,7 +7918,10 @@ for (const { label, failure, code, message } of [
     `a dependency still failing at the convergence deadline fails deployment with its own code (${label})`,
     requiresPostgres,
     async (context) => {
-      const fixture = await setup(context);
+      // The 2.5 s deadline fits only four to six passes on a loaded runner, too close
+      // to the default budget of five; with one attempt, more passes than the budget
+      // means two.
+      const fixture = await setup(context, { maxAttempts: 1 });
       const owner = await fixture.agent("dependency-down");
       const candidate = await fixture.revision(owner, 1);
       let observations = 0;
@@ -7720,7 +7940,7 @@ for (const { label, failure, code, message } of [
 
       const failed = await fixture.work(candidate, "failed_permanent", 30_000);
       assert.ok(
-        observations > 5,
+        observations > 1,
         `expected more passes than the attempt budget, saw ${observations}`,
       );
       assert.equal(failed.attempt_count, 1);

@@ -17,6 +17,7 @@ import {
   githubConfigurationData,
   requestHead,
   serviceConfigurationData,
+  custodyLimits,
 } from "../fixtures/repository-credentials/builders.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
 
@@ -181,7 +182,7 @@ test("Git normalization preserves raw endpoint and profile denial before acquisi
   t.after(() => key.close());
   const factory = createGitHubDriverFactory({
     configuration: githubConfigurationData(),
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,
@@ -270,7 +271,7 @@ test("literal .git repository names normalize against the admitted identity", as
   const clock = createControlledClock();
   const factory = createGitHubDriverFactory({
     configuration: githubConfigurationData({ repository: "Fixture/Repository.git" }),
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,
@@ -466,7 +467,7 @@ test("real HTTPS issuance preserves exact profiles after hour 13 and revokes wit
       configVersion: "v1",
       repository: "Fixture/Repository",
     }),
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,
@@ -652,7 +653,7 @@ test("refused and cancelled observations remain independently captured and token
     configuration: githubConfigurationData({
       providerInstanceId: "fixture-instance",
     }),
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,
@@ -731,7 +732,7 @@ test("token issue failures before a connection are definite; after one they stay
   const factoryFor = (origin) =>
     createGitHubDriverFactory({
       configuration: githubConfigurationData({ providerInstanceId: "fixture-instance" }),
-      key,
+      authority: key,
       clock,
       gatewayOrigin: config.gateway.publicOrigin,
       limits: config.limits,
@@ -801,7 +802,7 @@ test("retirement uncertainty retains real custody after non-204 replies and lost
       t.after(() => key.close());
       const factory = createGitHubDriverFactory({
         configuration: githubConfigurationData({ providerInstanceId: "fixture-instance" }),
-        key,
+        authority: key,
         clock,
         gatewayOrigin: config.gateway.publicOrigin,
         limits: config.limits,
@@ -814,9 +815,8 @@ test("retirement uncertainty retains real custody after non-204 replies and lost
       const authority = { sessionId: name, ...factory.resolve("git-read").binding };
       const custody = createCustody({
         clock,
+        ...custodyLimits,
         maximumSlots: 1,
-        maximumAccessBytes: 16384,
-        maximumRenewalBytes: 16384,
         maximumCallbacks: 1,
         admitted: () => true,
         changed() {},
