@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
 updated: 2026-10-07
-last_updated_session: "d94-revision-read"
+last_updated_session: "gated-refresh-1007"
 ---
 
 # Namespace IAM Policy Flow
@@ -142,8 +142,9 @@ outside these routes. Agent provisioning grants the Agent's ServicePrincipal
 Secret `operate`. Deploy admission
 (`packages/occ/src/index.ts:grantDeployerRevisionRead`) grants a caller who
 cannot already read the new revision exact `agent_revision:read` on it, in the
-deploy transaction; the API's deploy event lists it in `grantedAccessBindings`,
-and an audit failure rolls it back with the revision.
+deploy transaction; the API's deploy event lists it in `grantedAccessBindings`
+or names why none was written in `revisionReadGrantSkipped`, and an audit
+failure rolls it back with the revision.
 
 State also provides an opt-in Installation authority and native-IAM barrier
 for an original transaction. Its SQL supplier is unregistered, and the
@@ -177,6 +178,7 @@ selected account, session, and policy writers join the same protocol.
 
 ## Changelog
 
+- 2026-10-07 12:45: The deploy event names why no revision read was granted. (gated-refresh-1007)
 - 2026-10-07 11:00: Name the bindings deploy and provisioning write outside these routes. (d94-revision-read)
 - 2026-10-01 20:30: Refuse AccessBindings whose Role cannot apply to the target. (fix-d93-d100)
 - 2026-09-29 16:40: Record the Installation authorization and the Role or AccessBinding changed in IAM policy audit events. (fix-5)

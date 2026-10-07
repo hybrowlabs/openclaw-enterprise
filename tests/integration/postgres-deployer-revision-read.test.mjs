@@ -140,6 +140,7 @@ test(
     const read = await deployer.request("GET", `${agentPath}/revisions/${second.revision.id}`);
     assert.equal(read.statusCode, 200, read.body);
     assert.deepEqual(second.details.grantedAccessBindings, [deployerBinding(second.revision.id)]);
+    assert.equal(second.details.revisionReadGrantSkipped, undefined);
     // The grant is exact: not the administrator's earlier revision, and nothing for a sharee.
     const listed = await deployer.request("GET", `${agentPath}/revisions`);
     assert.equal(listed.statusCode, 200, listed.body);
@@ -156,9 +157,10 @@ test(
       403,
     );
 
-    // A deployer that already reads every revision gets no grant and no audit entry.
+    // A deployer that already reads every revision gets no grant; the event says why.
     const byAdministrator = await deployAs({ request: (method, url) => inject(method, url) });
     assert.equal(byAdministrator.details.grantedAccessBindings, undefined);
+    assert.equal(byAdministrator.details.revisionReadGrantSkipped, "already-readable");
 
     // A later deploy by the member reuses the Namespace's one deployed-revision Role.
     const fourth = await deployAs(deployer);

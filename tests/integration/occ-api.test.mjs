@@ -6198,6 +6198,7 @@ test("deploy grants the deployer exact revision read only when it can hold the b
     resolveApprovedDevelopmentHarness,
   );
   assert.deepEqual(byAdministrator.grantedAccessBindings, []);
+  assert.equal(byAdministrator.revisionReadGrantSkipped, "already-readable");
   assert.deepEqual(await policy("access-bindings"), []);
 
   // An Installation-scoped ServicePrincipal may deploy but cannot be the subject of a
@@ -6216,6 +6217,7 @@ test("deploy grants the deployer exact revision read only when it can hold the b
     resolveApprovedDevelopmentHarness,
   );
   assert.deepEqual(unbindable.grantedAccessBindings, []);
+  assert.equal(unbindable.revisionReadGrantSkipped, "subject-not-bindable");
   assert.equal(
     (await policy("roles")).some((role) => role.id === deployerRole),
     false,
@@ -6256,6 +6258,7 @@ test("deploy grants the deployer exact revision read only when it can hold the b
       candidate.action === "openclaw.agents.deploy" && candidate.resource.id === deployed.data.id,
   );
   assert.deepEqual(event?.details?.grantedAccessBindings, [grant]);
+  assert.equal(event?.details?.revisionReadGrantSkipped, undefined);
   assert.deepEqual(
     (await policy("access-bindings")).filter((binding) => binding.roleId === deployerRole),
     [{ ...grant, namespaceId: namespace.id }],
@@ -6263,6 +6266,40 @@ test("deploy grants the deployer exact revision read only when it can hold the b
   assert.deepEqual((await policy("roles")).find((role) => role.id === deployerRole)?.permissions, [
     { action: "read", resourceKind: "agent_revision" },
   ]);
+
+  // An IAM Driver that keeps policy outside platform State gets no grant written here; the
+  // result says so instead of looking like a caller who could already read the revision.
+  const externalDriver = {
+    id: "iam-external-policy",
+    capability: "iam",
+    implementation: "deployer-revision-read-test",
+    async lookupIdentity() {
+      return undefined;
+    },
+    async authorize(request) {
+      return {
+        allowed: true,
+        reason: "admitted for the external-policy deploy case",
+        driverId: "iam-external-policy",
+        evidence: {
+          identityId: request.principalId,
+          groupIds: [],
+          bindingIds: [],
+          roleIds: [],
+          restrictionIds: [],
+        },
+      };
+    },
+  };
+  fixture.controller.registerDriver(externalDriver);
+  fixture.controller.selectDriver("iam", externalDriver.id);
+  const external = await fixture.controller.deployAgentWithAuthorization(
+    member.id,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.deepEqual(external.grantedAccessBindings, []);
+  assert.equal(external.revisionReadGrantSkipped, "external-iam-policy");
 });
 
 test("IAM and audit dependency failures fail closed without orphaned state", async () => {

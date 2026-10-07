@@ -681,11 +681,36 @@ export interface DeployAgentAuthorization {
   readonly decision: Readonly<AuthorizationDecision>;
 }
 
-export interface AuthorizedAgentDeployment {
-  readonly revision: Readonly<AgentRevision>;
-  readonly authorization: Readonly<DeployAgentAuthorization>;
+/**
+ * Why deploy admission wrote no revision-read grant for its caller: the caller can already
+ * read the revision, the selected IAM Driver keeps policy outside platform State, or the
+ * caller cannot hold a Namespace binding (an Installation-scoped ServicePrincipal).
+ */
+export type DeployerRevisionReadSkip =
+  "already-readable" | "external-iam-policy" | "subject-not-bindable";
+
+export interface DeployerRevisionReadGrant {
   /** The deployer's read grant on the admitted revision, when admission wrote one. */
   readonly grantedAccessBindings: readonly RemovedAccessBinding[];
+  /** Set exactly when `grantedAccessBindings` is empty. */
+  readonly revisionReadGrantSkipped?: DeployerRevisionReadSkip;
+}
+
+export interface AuthorizedAgentDeployment extends DeployerRevisionReadGrant {
+  readonly revision: Readonly<AgentRevision>;
+  readonly authorization: Readonly<DeployAgentAuthorization>;
+}
+
+/**
+ * Audit details for the deployer's revision-read grant, shared by the deploy event and the
+ * provisioning handoff checkpoint: the written binding, or why none was written.
+ */
+export function deployerRevisionReadAuditDetails(
+  grant: Readonly<DeployerRevisionReadGrant>,
+): Readonly<Record<string, unknown>> {
+  return grant.grantedAccessBindings.length > 0
+    ? { grantedAccessBindings: grant.grantedAccessBindings }
+    : { revisionReadGrantSkipped: grant.revisionReadGrantSkipped };
 }
 
 export interface ActiveAgentRevisionSelection {
@@ -2340,7 +2365,7 @@ export class OpenClawController {
           );
         }
         await this.fenceAgentProvisioning(state, claim);
-        const { revision, grantedAccessBindings } = await this.provisioningContext.run(claim, () =>
+        const admitted = await this.provisioningContext.run(claim, () =>
           this.deployAgentWithAuthorization(
             current.actorId,
             { namespaceId: current.namespaceId, agentId: current.agentId! },
@@ -2350,10 +2375,10 @@ export class OpenClawController {
         await this.commitProvisioningCheckpoint(
           state,
           claim,
-          { completedPhase: "handoff", status: "succeeded", revisionId: revision.id },
-          grantedAccessBindings.length === 0 ? undefined : { grantedAccessBindings },
+          { completedPhase: "handoff", status: "succeeded", revisionId: admitted.revision.id },
+          deployerRevisionReadAuditDetails(admitted),
         );
-        return revision;
+        return admitted.revision;
       });
       return Object.freeze({ outcome: "succeeded" as const, revisionId: revision.id });
     } catch (error) {
@@ -5942,11 +5967,7 @@ export class OpenClawController {
       if (running === undefined) {
         throw new ResourceStateConflictError("The Agent lifecycle changed during deployment.");
       }
-      const grantedAccessBindings = await this.grantDeployerRevisionRead(
-        state,
-        principalId,
-        revision,
-      );
+      const grant = await this.grantDeployerRevisionRead(state, principalId, revision);
       await this.record(state, {
         kind: "agent_revision",
         action: "reconcile",
@@ -5954,7 +5975,7 @@ export class OpenClawController {
         resourceId: revision.id,
         actorId: principalId,
       });
-      const result = Object.freeze({ revision, authorization, grantedAccessBindings });
+      const result = Object.freeze({ revision, authorization, ...grant });
       if (auditEvent) {
         await state.audit.append(auditEvent(result));
       }
@@ -7787,16 +7808,16 @@ export class OpenClawController {
    * the admission transaction. Deploy already required read on the Configuration
    * the revision snapshots and on its Secret and Harness sources, and its `202` returns the
    * snapshot, so the grant discloses nothing new. Agent deletion and Namespace teardown remove
-   * it with the revision. Returns the binding for the deploy audit event, or nothing when the
-   * deployer can already read the revision, the selected IAM Driver keeps policy outside
-   * platform State, or the deployer cannot hold a Namespace binding (an Installation-scoped
-   * ServicePrincipal).
+   * it with the revision. Returns the binding for the deploy audit event, or why none was
+   * written (see `DeployerRevisionReadSkip`).
    */
   private async grantDeployerRevisionRead(
     state: PlatformUnitOfWork,
     principalId: string,
     revision: Readonly<AgentRevision>,
-  ): Promise<readonly RemovedAccessBinding[]> {
+  ): Promise<Readonly<DeployerRevisionReadGrant>> {
+    const skipped = (revisionReadGrantSkipped: DeployerRevisionReadSkip) =>
+      Object.freeze({ grantedAccessBindings: Object.freeze([]), revisionReadGrantSkipped });
     const target = {
       kind: "agent_revision",
       id: revision.id,
@@ -7807,10 +7828,12 @@ export class OpenClawController {
       driver.namespacePolicyTransaction !== "platform-unit-of-work" ||
       driver.createNamespaceRole === undefined ||
       driver.createNamespaceAccessBinding === undefined ||
-      driver.deleteNamespaceRole === undefined ||
-      (await this.canRead(principalId, target))
+      driver.deleteNamespaceRole === undefined
     ) {
-      return Object.freeze([]);
+      return skipped("external-iam-policy");
+    }
+    if (await this.canRead(principalId, target)) {
+      return skipped("already-readable");
     }
     const namespaceId = revision.namespaceId;
     // One Role per Namespace, like the provisioning Secret grant; Roles are immutable, so a
@@ -7869,11 +7892,13 @@ export class OpenClawController {
             driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespaceId, roleId),
           );
         }
-        return Object.freeze([]);
+        return skipped("subject-not-bindable");
       }
       throw error;
     }
-    return Object.freeze([accessBindingAuditRecord(binding)]);
+    return Object.freeze({
+      grantedAccessBindings: Object.freeze([accessBindingAuditRecord(binding)]),
+    });
   }
 
   private async ensureAgentSecretOperateGrants(

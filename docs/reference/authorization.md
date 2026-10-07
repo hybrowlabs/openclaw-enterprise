@@ -324,13 +324,15 @@ admits, in the admission transaction, unless the caller can already read it.
 The binding (`binding_<revisionId>_deployer_read`) uses the Namespace Role
 `role_<namespaceId>_deployed_revision_read`, "Deployed revision read", which
 deploy creates on first use. The deploy audit event lists it in
-`grantedAccessBindings`. Deploy already requires read on the Configuration
+`grantedAccessBindings`, or gives `revisionReadGrantSkipped` when none was
+written. Deploy already requires read on the Configuration
 the revision snapshots and returns that snapshot, so the grant reveals nothing
 new. Other readers of the Agent, such as a Console sharee, still need their own
 revision grants. Administrators can delete the binding; Agent deletion removes
-it with the revision. An Installation-scoped ServicePrincipal cannot hold a
-Namespace binding and gets none, and IAM Drivers that keep policy outside
-platform State write none.
+it with the revision. The skip reasons are `already-readable`,
+`subject-not-bindable` (an Installation-scoped ServicePrincipal cannot hold a
+Namespace binding) and `external-iam-policy` (the IAM Driver keeps policy
+outside platform State).
 
 [Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
 tiers on the exact Agent and revision: Pod status and Events need Agent
@@ -381,6 +383,8 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 12:45: The deploy event says why no revision read was granted. (gated-refresh-1007)
 
 - 2026-10-07 11:00: Deploy grants its caller exact read of the admitted revision. (d94-revision-read)
 
