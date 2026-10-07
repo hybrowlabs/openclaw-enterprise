@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: 2026-10-01
-last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
+updated: 2026-10-07
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Credential source lifecycle Flow
@@ -130,8 +130,8 @@ database rejects deleting a source an Agent draft still uses.
 
 `packages/occ/src/index.ts:deployAgent`, `packages/occ/src/index.ts:admitHarnessAuth`
 
-`assertCredentialGatewayDelivery` rejects `api_key`, `codex_pat`, and
-`chatgpt_service_account` with `409` while a gateway is selected. For
+`assertCredentialGatewayDelivery` rejects `api_key` and both sources of
+`codex_pat` with `409` while a gateway is selected. For
 `credential_source`, `admitHarnessAuth` authorizes the Agent service principal's
 `operate`, requires a `ready` source, and reads its catalog type, which must
 declare `harnessAuth`. The frozen snapshot is `{ method, sourceId,
@@ -246,7 +246,7 @@ than re-attach the source.
   methods with a gateway selected. It uses an in-process gateway double, not
   OpenShell.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the
-  provider, profile, update, and detach RPC encoding against the pinned `v0.1.3-pre.1`
+  provider, profile, update, and detach RPC encoding against the pinned `v0.1.3-pre.2`
   wire fixture.
 - The credential withdrawal cases in
   `tests/integration/postgres-worker-agent-revision.test.mjs` run the real queue
@@ -284,9 +284,12 @@ than re-attach the source.
 
 ## Changelog
 
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
+
 - 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
 - 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
 - 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
+- 2026-10-01 11:37: Updated the OpenShell wire-fixture pin to v0.1.3-pre.2. (authoring-run/f1f395c4-2594-4b07-9e92-ae829a5b5dd4 - f22a584e6ce21d505b40a72fdb5ae1c6e74c1c84)
 - 2026-09-30 21:14: Updated the independent OpenShell wire-contract verification pointer to v0.1.3-pre.1. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 
 - 2026-09-30 04:00: Recorded withdrawal attempt reasons, replay deduplication, and maintenance of a withdrawn revision; corrected the update ordering. (pr-553-alignment - 3a5e48035)

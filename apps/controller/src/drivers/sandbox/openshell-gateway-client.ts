@@ -1,5 +1,17 @@
-import { TransientDependencyError } from "@openclaw-enterprise/occ";
+import {
+  ADMISSION_LIMIT_DETAILS,
+  OpenShellAdmissionLimitError,
+  OpenShellGatewayFailure,
+  OpenShellProviderAlreadyExistsError,
+  OpenShellRequestReplayRefusedError,
+  OpenShellSandboxAlreadyExistsError,
+  OpenShellWorkspaceAlreadyExistsError,
+  REPLAY_REFUSAL_REASONS,
+  openShellErrorReason,
+  statusCode,
+} from "./openshell-gateway-errors.ts";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
+import { DependencyUnavailableError } from "@openclaw-enterprise/occ";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -7,6 +19,14 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Client, ClientUnaryCall, Metadata, ServiceClientConstructor } from "@grpc/grpc-js";
 import type { PackageDefinition } from "@grpc/proto-loader";
+
+export {
+  OpenShellAdmissionLimitError,
+  OpenShellProviderAlreadyExistsError,
+  OpenShellRequestReplayRefusedError,
+  OpenShellSandboxAlreadyExistsError,
+  OpenShellWorkspaceAlreadyExistsError,
+} from "./openshell-gateway-errors.ts";
 
 type RecordValue = Readonly<Record<string, unknown>>;
 
@@ -29,6 +49,7 @@ export interface OpenShellSandboxCreateRequest {
   readonly serviceExposures: readonly {
     readonly service: string;
     readonly targetPort: number;
+    readonly authorizationMode?: "strip" | "bearer_passthrough";
   }[];
 }
 
@@ -51,8 +72,19 @@ export interface OpenShellSandboxResponse {
   readonly workspace?: string;
   readonly labels: Readonly<Record<string, string>>;
   readonly annotations: Readonly<Record<string, string>>;
+  readonly spec?: Readonly<Record<string, unknown>>;
   readonly phase?: string | number;
   readonly serviceUrls: Readonly<Record<string, string>>;
+}
+
+export interface OpenShellServiceResponse {
+  readonly sandbox: string;
+  readonly name: string;
+  readonly targetPort: number;
+  readonly authorizationMode: string | number;
+  /** URL advertised by OpenShell for workload traffic, before control-endpoint normalization. */
+  readonly advertisedUrl: string;
+  readonly url: string;
 }
 
 export interface OpenShellWorkspaceResponse {
@@ -81,6 +113,11 @@ export interface OpenShellProviderProfile {
     readonly authStyle: string;
     readonly headerName: string;
   }[];
+  readonly files?: readonly {
+    readonly path: string;
+    readonly content: string;
+    readonly environmentVariable: string;
+  }[];
   readonly endpoints: readonly OpenShellProviderProfileEndpoint[];
   readonly binaries: readonly string[];
   readonly inferenceCapable: boolean;
@@ -100,12 +137,17 @@ export interface OpenShellProviderCreateRequest {
   readonly labels: Readonly<Record<string, string>>;
   /** Write-only material; never logged or returned by this client. */
   readonly credentials: Readonly<Record<string, string>>;
+  /** RFC 3339 UTC expiry for each expiring credential environment variable. */
+  readonly credentialExpirationTimes?: Readonly<Record<string, string>>;
+  readonly config?: Readonly<Record<string, string>>;
 }
 
 export interface OpenShellProviderResponse {
   readonly name: string;
   readonly type: string;
   readonly labels: Readonly<Record<string, string>>;
+  readonly config: Readonly<Record<string, string>>;
+  readonly resourceVersion: string;
 }
 
 export interface OpenShellSandboxProviderStatus {
@@ -186,6 +228,12 @@ export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
   ): Promise<OpenShellSandboxResponse | undefined>;
   /** The exposed service's URL, or undefined when the endpoint does not exist. */
   getServiceUrl(request: OpenShellServiceRequest, signal: AbortSignal): Promise<string | undefined>;
+  getService(
+    workspace: string,
+    sandbox: string,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellServiceResponse | undefined>;
   deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void>;
   getProviderProfile(
     workspace: string,
@@ -224,7 +272,16 @@ export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
     name: string,
     credentials: Readonly<Record<string, string>>,
     signal: AbortSignal,
+    credentialExpirationTimes?: Readonly<Record<string, string>>,
   ): Promise<void>;
+  /** Merges nonempty configuration into an existing provider with optimistic concurrency. */
+  updateProviderConfig(
+    workspace: string,
+    name: string,
+    config: Readonly<Record<string, string>>,
+    expectedResourceVersion: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderResponse>;
   /** Undefined when the Sandbox no longer exists, so nothing remains to revoke. */
   detachSandboxProvider(
     workspace: string,
@@ -273,172 +330,25 @@ type OpenShellUnaryMethod = (
 
 type OpenShellGrpcClient = Client & Record<OpenShellMethod, OpenShellUnaryMethod>;
 
-class OpenShellGatewayFailure extends Error {}
+class OpenShellGatewayRequestFailure extends DependencyUnavailableError {
+  readonly grpcStatus: number | undefined;
 
-export class OpenShellSandboxAlreadyExistsError extends Error {
-  readonly sandboxName: string;
-
-  constructor(sandboxName: string) {
-    super(`OpenShell Sandbox ${sandboxName} already exists.`);
-    this.sandboxName = sandboxName;
-  }
-}
-
-/**
- * The gateway refused a request_id it had already admitted: an earlier call with this ID
- * errored server-side (REQUEST_OUTCOME_UNCERTAIN, permanent), carried another payload
- * (REQUEST_ID_PAYLOAD_MISMATCH), or succeeded but can no longer be replayed
- * (REQUEST_REPLAY_UNAVAILABLE). Nothing ran for this call.
- */
-export class OpenShellRequestReplayRefusedError extends Error {
-  readonly reason: string;
-
-  constructor(reason: string, message: string) {
-    super(`OpenShell refused the request_id (${reason}): ${message}`);
-    this.reason = reason;
-  }
-}
-
-// OpenShell's exact refusal once the caller holds 1000 durable request admissions
-// (crates/openshell-server/src/grpc/mutation_replay.rs). Other RESOURCE_EXHAUSTED
-// refusals, such as the rate limit or busy admission workers, stay the raw gRPC error.
-const ADMISSION_LIMIT_DETAILS = "caller has reached the durable mutation admission limit";
-
-/**
- * OpenShell refused a mutation because OCC's gateway identity holds its maximum of 1000
- * durable request admissions. Completed admissions free up 24 h after completion, so the
- * worker holds the revision pending without spending attempts; admissions left unresolved
- * never expire, so a limit still reached at the deployment deadline fails it.
- */
-export class OpenShellAdmissionLimitError extends TransientDependencyError {
-  constructor(method: string, cause: unknown) {
+  constructor(method: OpenShellMethod, error: unknown) {
+    const grpcStatus = rawStatusCode(error);
+    const detail =
+      method === "CreateSandbox"
+        ? sanitizedErrorDetail(error)
+        : grpcStatus === undefined
+          ? sanitizedText(error instanceof Error ? error.message : undefined)
+          : undefined;
     super(
-      "sandbox_admission",
-      "unavailable",
-      `OpenShell refused ${method}: the controller's gateway identity holds OpenShell's limit of 1000 durable request admissions. ` +
-        "Completed admissions free up 24 h after completion; unresolved ones never expire and OpenShell has no reset API, " +
-        "so if the limit persists, investigate the unresolved admissions in the OpenShell gateway database, then redeploy.",
-      { cause },
+      `OpenShell ${method} failed${
+        grpcStatus === undefined ? "" : ` with gRPC status ${grpcStatus}`
+      }${detail === undefined ? "." : `: ${detail}`}`,
     );
-    this.name = "OpenShellAdmissionLimitError";
+    this.grpcStatus = grpcStatus;
   }
 }
-
-const REPLAY_REFUSAL_REASONS: ReadonlySet<string> = new Set([
-  "REQUEST_OUTCOME_UNCERTAIN",
-  "REQUEST_ID_PAYLOAD_MISMATCH",
-  "REQUEST_REPLAY_UNAVAILABLE",
-]);
-const OPENSHELL_ERROR_DOMAIN = "openshell.nvidia.com";
-const ERROR_INFO_TYPE_URL = "type.googleapis.com/google.rpc.ErrorInfo";
-
-interface ProtobufFields {
-  readonly varints: Map<number, number[]>;
-  readonly bytes: Map<number, Uint8Array[]>;
-}
-
-/** The varint and length-delimited fields of one protobuf message, or undefined if malformed. */
-function protobufFields(bytes: Uint8Array): ProtobufFields | undefined {
-  const fields: ProtobufFields = { varints: new Map(), bytes: new Map() };
-  const append = <T>(map: Map<number, T[]>, field: number, value: T) => {
-    const values = map.get(field) ?? [];
-    values.push(value);
-    map.set(field, values);
-  };
-  let offset = 0;
-  const varint = (): number | undefined => {
-    let value = 0;
-    for (let shift = 0; shift < 70 && offset < bytes.length; shift += 7) {
-      const byte = bytes[offset++]!;
-      value += (byte & 0x7f) * 2 ** shift;
-      if (byte < 0x80) {
-        return value;
-      }
-    }
-    return undefined;
-  };
-  while (offset < bytes.length) {
-    const key = varint();
-    if (key === undefined) {
-      return undefined;
-    }
-    const field = Math.floor(key / 8);
-    const wireType = key % 8;
-    if (wireType === 0) {
-      const value = varint();
-      if (value === undefined) {
-        return undefined;
-      }
-      append(fields.varints, field, value);
-    } else if (wireType === 1 || wireType === 5) {
-      offset += wireType === 1 ? 8 : 4;
-    } else if (wireType === 2) {
-      const length = varint();
-      if (length === undefined || length > bytes.length - offset) {
-        return undefined;
-      }
-      append(fields.bytes, field, bytes.subarray(offset, offset + length));
-      offset += length;
-    } else {
-      return undefined;
-    }
-  }
-  return offset === bytes.length ? fields : undefined;
-}
-
-function utf8(bytes: Uint8Array | undefined): string | undefined {
-  return bytes === undefined ? undefined : Buffer.from(bytes).toString("utf8");
-}
-
-/** OpenShell's google.rpc.ErrorInfo reason from a FAILED_PRECONDITION status details trailer. */
-function openShellErrorReason(error: unknown, failedPrecondition: number): string | undefined {
-  const metadata = asRecord(error)?.metadata as { get?: unknown } | undefined;
-  const values =
-    typeof metadata?.get === "function"
-      ? (metadata.get as (key: string) => unknown)("grpc-status-details-bin")
-      : undefined;
-  const details = Array.isArray(values) ? values[0] : undefined;
-  if (!(details instanceof Uint8Array)) {
-    return undefined;
-  }
-  // google.rpc.Status: 1 = code, 3 = repeated Any details; Any: 1 = type_url,
-  // 2 = value; ErrorInfo: 1 = reason, 2 = domain. Scalars are last-wins.
-  const status = protobufFields(details);
-  if (status === undefined || (status.varints.get(1)?.at(-1) ?? 0) !== failedPrecondition) {
-    return undefined;
-  }
-  for (const any of status.bytes.get(3) ?? []) {
-    const fields = protobufFields(any)?.bytes;
-    const value = fields?.get(2)?.at(-1);
-    if (utf8(fields?.get(1)?.at(-1)) !== ERROR_INFO_TYPE_URL || value === undefined) {
-      continue;
-    }
-    const info = protobufFields(value)?.bytes;
-    if (utf8(info?.get(2)?.at(-1)) === OPENSHELL_ERROR_DOMAIN) {
-      return utf8(info?.get(1)?.at(-1));
-    }
-  }
-  return undefined;
-}
-
-export class OpenShellProviderAlreadyExistsError extends Error {
-  readonly providerName: string;
-
-  constructor(providerName: string) {
-    super(`OpenShell provider ${providerName} already exists.`);
-    this.providerName = providerName;
-  }
-}
-
-export class OpenShellWorkspaceAlreadyExistsError extends Error {
-  readonly workspaceName: string;
-
-  constructor(workspaceName: string) {
-    super(`OpenShell Workspace ${workspaceName} already exists.`);
-    this.workspaceName = workspaceName;
-  }
-}
-
 const CLIENT_MODULE = "@grpc/grpc-js";
 const LOADER_MODULE = "@grpc/proto-loader";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -454,45 +364,28 @@ function deadline(timeoutMs: number): Date {
   return new Date(Date.now() + timeoutMs);
 }
 
-function statusCode(error: unknown): number | undefined {
+function rawStatusCode(error: unknown): number | undefined {
   const candidate = asRecord(error)?.code;
   return typeof candidate === "number" ? candidate : undefined;
 }
 
-function sandboxResponse(
-  response: RecordValue,
-  operation: string,
-  endpoint: string,
-): OpenShellSandboxResponse {
-  const sandbox = asRecord(response.sandbox);
-  const metadata = asRecord(sandbox?.metadata);
-  const name = metadata?.name;
-  if (typeof name !== "string" || name.trim().length === 0) {
-    throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable name.`);
+function sanitizedErrorDetail(error: unknown): string | undefined {
+  return sanitizedText(asRecord(error)?.details);
+}
+
+function sanitizedText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  const phase = asRecord(sandbox?.status)?.phase;
-  return Object.freeze({
-    name,
-    ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
-    ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
-      ? { workspace: metadata.workspace }
-      : {}),
-    labels: Object.freeze({
-      ...(asRecord(metadata?.labels) as Record<string, string> | undefined),
-    }),
-    annotations: Object.freeze({
-      ...(asRecord(metadata?.annotations) as Record<string, string> | undefined),
-    }),
-    serviceUrls: Object.freeze(
-      Object.fromEntries(
-        Object.entries(asRecord(response.service_urls) ?? {}).map(([service, value]) => [
-          service,
-          normalizeServiceUrl(value, endpoint),
-        ]),
-      ),
-    ),
-    ...(phase === undefined ? {} : { phase: phase as string | number }),
-  });
+  const normalized = [...value]
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127 ? " " : character;
+    })
+    .join("")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return normalized.length === 0 ? undefined : normalized.slice(0, 512);
 }
 
 function workspaceResponse(response: RecordValue, operation: string): OpenShellWorkspaceResponse {
@@ -528,7 +421,13 @@ function providerResponse(value: unknown, operation: string): OpenShellProviderR
   const provider = asRecord(value);
   const metadata = asRecord(provider?.metadata);
   const name = metadata?.name;
-  if (typeof name !== "string" || name.trim().length === 0 || typeof provider?.type !== "string") {
+  const resourceVersion = String(metadata?.resource_version ?? "0");
+  if (
+    typeof name !== "string" ||
+    name.trim().length === 0 ||
+    typeof provider?.type !== "string" ||
+    !/^\d+$/u.test(resourceVersion)
+  ) {
     throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable provider.`);
   }
   // Credential values are never copied out of gateway responses.
@@ -536,6 +435,8 @@ function providerResponse(value: unknown, operation: string): OpenShellProviderR
     name,
     type: provider.type,
     labels: stringMap(metadata?.labels, "provider labels"),
+    config: stringMap(provider?.config, "provider config"),
+    resourceVersion,
   });
 }
 
@@ -550,6 +451,11 @@ function profileMessage(profile: OpenShellProviderProfile): RecordValue {
       required: credential.required,
       auth_style: credential.authStyle,
       header_name: credential.headerName,
+    })),
+    files: (profile.files ?? []).map((file) => ({
+      path: file.path,
+      content: file.content,
+      env_var: file.environmentVariable,
     })),
     endpoints: profile.endpoints.map((endpoint) => ({
       host: endpoint.host,
@@ -670,7 +576,7 @@ function normalizeEndpoint(endpoint: string): {
   throw new OpenShellGatewayFailure("OpenShell gateway endpoint must use http or https.");
 }
 
-function normalizeServiceUrl(value: unknown, endpoint: string): string {
+function serviceUrl(value: unknown): URL {
   let serviceUrl: URL;
   try {
     serviceUrl = new URL(nonempty(value, "OpenShell service URL"));
@@ -689,10 +595,55 @@ function normalizeServiceUrl(value: unknown, endpoint: string): string {
       "OpenShell service URL must be an HTTP origin without credentials, query, or fragment.",
     );
   }
+  return serviceUrl;
+}
+
+function normalizeServiceUrl(value: unknown, endpoint: string): string {
+  const normalized = serviceUrl(value);
   const gateway = normalizeEndpoint(endpoint);
   const gatewayUrl = new URL(`${gateway.secure ? "https" : "http"}://${gateway.target}`);
-  serviceUrl.port = gatewayUrl.port;
-  return serviceUrl.toString();
+  normalized.port = gatewayUrl.port;
+  return normalized.toString();
+}
+
+function sandboxResponse(
+  response: RecordValue,
+  operation: string,
+  endpoint: string,
+  requireServiceUrls: boolean,
+): OpenShellSandboxResponse {
+  const sandbox = asRecord(response.sandbox);
+  const metadata = asRecord(sandbox?.metadata);
+  const name = metadata?.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable name.`);
+  }
+  const serviceUrls = asRecord(response.service_urls);
+  if (serviceUrls === undefined && requireServiceUrls) {
+    throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no service URL map.`);
+  }
+  const spec = asRecord(sandbox?.spec);
+  return Object.freeze({
+    name,
+    ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
+    ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
+      ? { workspace: metadata.workspace }
+      : {}),
+    labels: stringMap(metadata?.labels, "Sandbox labels"),
+    annotations: stringMap(metadata?.annotations, "Sandbox annotations"),
+    ...(spec === undefined ? {} : { spec: Object.freeze({ ...spec }) }),
+    serviceUrls: Object.freeze(
+      Object.fromEntries(
+        Object.entries(serviceUrls ?? {}).map(([service, value]) => [
+          service,
+          normalizeServiceUrl(value, endpoint),
+        ]),
+      ),
+    ),
+    ...(asRecord(sandbox?.status)?.phase === undefined
+      ? {}
+      : { phase: asRecord(sandbox?.status)?.phase as string | number }),
+  });
 }
 
 function toStructValue(value: unknown): Record<string, unknown> {
@@ -895,10 +846,16 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
           labels: { ...request.labels },
           annotations: { ...request.annotations },
           spec: request.spec,
-          service_exposures: request.serviceExposures.map(({ service, targetPort }) => ({
-            service,
-            target_port: targetPort,
-          })),
+          service_exposures: request.serviceExposures.map(
+            ({ service, targetPort, authorizationMode }) => ({
+              service,
+              target_port: targetPort,
+              authorization_mode:
+                authorizationMode === "bearer_passthrough"
+                  ? "SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH"
+                  : "SERVICE_AUTHORIZATION_MODE_STRIP",
+            }),
+          ),
         },
         signal,
       );
@@ -925,7 +882,12 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
     if (serviceUrls === undefined && request.serviceExposures.length !== 0) {
       throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no service URL map.");
     }
-    return sandboxResponse(response, "CreateSandbox", this.options.endpoint);
+    return sandboxResponse(
+      response,
+      "CreateSandbox",
+      this.options.endpoint,
+      request.serviceExposures.length !== 0,
+    );
   }
 
   async getSandbox(
@@ -941,6 +903,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
         ),
         "GetSandbox",
         this.options.endpoint,
+        false,
       );
     } catch (error) {
       if (await this.isStatus(error, "NOT_FOUND")) {
@@ -972,6 +935,55 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       throw error;
     }
     return normalizeServiceUrl(response.url, this.options.endpoint);
+  }
+
+  async getService(
+    workspace: string,
+    sandbox: string,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellServiceResponse | undefined> {
+    let response: RecordValue;
+    try {
+      response = await this.unary(
+        "GetService",
+        {
+          sandbox: nonempty(sandbox, "OpenShell Sandbox name"),
+          name,
+          workspace_scope: { workspace },
+        },
+        signal,
+      );
+    } catch (error) {
+      const { grpc } = await this.ensureClient();
+      if (statusCode(error) === grpc.status.NOT_FOUND) {
+        return undefined;
+      }
+      throw error;
+    }
+    const endpoint = asRecord(response.endpoint);
+    const endpointName = endpoint?.name ?? "";
+    const targetPort = endpoint?.target_port;
+    const authorizationMode = endpoint?.authorization_mode;
+    if (
+      endpoint?.sandbox !== sandbox ||
+      endpointName !== name ||
+      typeof targetPort !== "number" ||
+      !Number.isSafeInteger(targetPort) ||
+      targetPort < 1 ||
+      targetPort > 65_535 ||
+      (typeof authorizationMode !== "string" && typeof authorizationMode !== "number")
+    ) {
+      throw new OpenShellGatewayFailure("OpenShell GetService returned an invalid endpoint.");
+    }
+    return Object.freeze({
+      sandbox,
+      name,
+      targetPort,
+      authorizationMode,
+      advertisedUrl: serviceUrl(response.url).toString(),
+      url: normalizeServiceUrl(response.url, this.options.endpoint),
+    });
   }
 
   async deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void> {
@@ -1130,6 +1142,13 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
             // OCC imports its profiles into the same workspace as the provider.
             profile_workspace: request.workspace,
             credentials: { ...request.credentials },
+            credential_expiration_times: Object.fromEntries(
+              Object.entries(request.credentialExpirationTimes ?? {}).map(([key, value]) => [
+                key,
+                timestampMessage(value),
+              ]),
+            ),
+            config: { ...(request.config ?? {}) },
           },
           workspace_scope: { workspace: request.workspace },
           request_id: randomUUID(),
@@ -1207,6 +1226,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
     name: string,
     credentials: Readonly<Record<string, string>>,
     signal: AbortSignal,
+    credentialExpirationTimes: Readonly<Record<string, string>> = {},
   ): Promise<void> {
     if (Object.values(credentials).some((value) => !isNonEmptyString(value))) {
       // An empty value would leave the existing credential in place instead of replacing it.
@@ -1220,10 +1240,53 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
           credentials: { ...credentials },
         },
         workspace_scope: { workspace },
+        credential_expiration_times: Object.fromEntries(
+          Object.entries(credentialExpirationTimes).map(([key, value]) => [
+            key,
+            timestampMessage(value),
+          ]),
+        ),
         request_id: randomUUID(),
       },
       signal,
     );
+  }
+
+  async updateProviderConfig(
+    workspace: string,
+    name: string,
+    config: Readonly<Record<string, string>>,
+    expectedResourceVersion: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderResponse> {
+    if (
+      Object.keys(config).length === 0 ||
+      Object.values(config).some((value) => !isNonEmptyString(value))
+    ) {
+      // OpenShell interprets an empty value as a request to delete that field.
+      throw new OpenShellGatewayFailure("OpenShell provider config updates must be nonempty.");
+    }
+    if (!/^[1-9]\d*$/u.test(expectedResourceVersion)) {
+      throw new OpenShellGatewayFailure(
+        "OpenShell provider config updates require a positive resource version.",
+      );
+    }
+    const response = await this.unary(
+      "UpdateProvider",
+      {
+        provider: {
+          metadata: {
+            name: nonempty(name, "OpenShell provider name"),
+            resource_version: expectedResourceVersion,
+          },
+          config: { ...config },
+        },
+        workspace_scope: { workspace },
+        request_id: randomUUID(),
+      },
+      signal,
+    );
+    return providerResponse(response.provider, "UpdateProvider");
   }
 
   async detachSandboxProvider(
@@ -1326,13 +1389,27 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
             }
             if (error !== null) {
               const details = asRecord(error)?.details;
-              reject(
-                statusCode(error) === grpc.status.RESOURCE_EXHAUSTED &&
-                  typeof details === "string" &&
-                  details.startsWith(ADMISSION_LIMIT_DETAILS)
-                  ? new OpenShellAdmissionLimitError(method, error)
-                  : error,
-              );
+              const code = statusCode(error);
+              if (
+                code === grpc.status.RESOURCE_EXHAUSTED &&
+                typeof details === "string" &&
+                details.startsWith(ADMISSION_LIMIT_DETAILS)
+              ) {
+                reject(new OpenShellAdmissionLimitError(method, error));
+              } else if (
+                [
+                  grpc.status.NOT_FOUND,
+                  grpc.status.ALREADY_EXISTS,
+                  grpc.status.FAILED_PRECONDITION,
+                  grpc.status.PERMISSION_DENIED,
+                  grpc.status.UNAUTHENTICATED,
+                  grpc.status.RESOURCE_EXHAUSTED,
+                ].includes(code ?? -1)
+              ) {
+                reject(error);
+              } else {
+                reject(new OpenShellGatewayRequestFailure(method, error));
+              }
               return;
             }
             resolve(asRecord(response) ?? {});
@@ -1340,7 +1417,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
         );
       } catch (error) {
         signal.removeEventListener("abort", abort);
-        throw error;
+        throw new OpenShellGatewayRequestFailure(method, error);
       }
     });
   }

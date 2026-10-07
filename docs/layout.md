@@ -53,6 +53,9 @@ owning Driver or Backend and wire it through composition. See
 [platform architecture](design.md) for component interactions, implementation
 status, and remaining design requirements.
 
+Within controller composition, `installation-presets.ts` owns Preset file loading
+and bundled-version assembly; `installation-config.ts` owns Driver composition.
+
 The [repository capability](reference/repository-credentials.md#repo-driver-contract)
 uses `RepoDriver` in `packages/contracts/src/repo.ts` and the bundled
 `drivers/repo/github/driver.ts` adapter. Under `apps/controller/src/`, its owners are:
@@ -136,7 +139,7 @@ Do not install dependencies as a verification side effect.
 | `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.                          |
 | `docs/flows/`                         | Source-backed runtime execution traces.                                                            |
 | `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.                                  |
-| `specs/README.md`                     | Shared index of RFCs, plans, and historical records.                                               |
+| `specs/README.md`                     | RFC index with linked numbers, names, and implementation statuses.                                 |
 | `specs/rfcs/`                         | Architectural proposals and decisions.                                                             |
 | `specs/plans/`                        | All implementation plans and historical delivery records; relevant RFCs are linked in frontmatter. |
 | `docs/assets/`                        | Documentation images and other shared assets.                                                      |

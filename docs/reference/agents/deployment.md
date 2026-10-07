@@ -34,7 +34,7 @@ authentication through the controller API remain deferred.
 
 An Agent may also reference one same-Namespace, OCC-owned
 [service account](../service-accounts.md) through
-`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`; setting
+`harnessAuth: { method: "codex_pat", source: { kind: "service_account", namespaceId, id: serviceAccountId } }`; setting
 `harnessAuth` to `null` clears it. This credential binding does not
 replace its ServicePrincipal or Kubernetes ServiceAccount.
 
@@ -142,7 +142,13 @@ refused with its capability error even when the Agent principal also lacks a
 grant. When only the Agent principal's grant is missing, the `403` names that
 `servicePrincipalId`, the action, and the exact Secret or credential source,
 for example `The Agent service principal <id> is not authorized to operate
-secret <id>`. Denials of your own permissions stay generic.
+secret <id>`. Its audit event records your own request with reason code
+`AGENT_PRINCIPAL_NOT_AUTHORIZED` and names that principal, action, resource and
+IAM evidence in its details. Denials of your own permissions stay generic.
+Admission then asks Compute to check the Configuration's gateway settings. On
+Kubernetes, a gateway setting it refuses answers `409 RESOURCE_CONFLICT` naming
+the setting and what is accepted, never its value, before any revision is created
+(see [gateway authentication](../drivers/kubernetes-compute/networking-and-isolation.md#gateway-authentication)).
 
 ### Pending deployment progress
 

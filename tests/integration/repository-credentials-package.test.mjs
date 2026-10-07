@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { availablePort } from "../helpers/available-port.mjs";
+import { reservePort, reservedPortArgs } from "../helpers/available-port.mjs";
 
 const root = resolve(".");
 
@@ -120,14 +120,19 @@ test(
     assert.equal(openssl.status, 0);
     await chmod(key, 0o600);
     await chmod(certificate, 0o644);
-    const port = await availablePort();
+    // Both services below bind a configured gateway port long after it is chosen. Hold each
+    // port until its service has bound it, so no other socket takes it in between.
+    const serviceReservation = await reservePort();
+    t.after(serviceReservation.release);
+    const developmentReservation = await reservePort();
+    t.after(developmentReservation.release);
     const configuration = join(temporary, "service.json");
     await writeFile(
       configuration,
       JSON.stringify({
         gateway: {
           publicOrigin: "https://credentials.example.test",
-          listen: `127.0.0.1:${port}`,
+          listen: `127.0.0.1:${serviceReservation.port}`,
           tlsCertFile: certificate,
           tlsKeyFile: key,
           controlSocket: join(temporary, "control.sock"),
@@ -162,6 +167,121 @@ test(
     assert.equal(checked.status, 0, checked.stderr);
     assert.equal(JSON.parse(checked.stdout).valid, true);
     assert.equal(checked.stdout.includes("PRIVATE KEY"), false);
+    // The development token authority needs the process flag in both argv parsers.
+    const token = `gho_${"p".repeat(36)}`;
+    const tokenFile = join(temporary, "token");
+    await writeFile(tokenFile, `${token}\n`, { mode: 0o600 });
+    const tokenConfiguration = join(temporary, "token-service.json");
+    const appConfiguration = JSON.parse(await readFile(configuration, "utf8"));
+    await writeFile(
+      tokenConfiguration,
+      JSON.stringify({
+        gateway: {
+          ...appConfiguration.gateway,
+          listen: `127.0.0.1:${developmentReservation.port}`,
+          controlSocket: join(temporary, "token-control.sock"),
+        },
+        sessionPolicy: {
+          maximumDurationSeconds: 28800,
+          defaultProfile: "git-write",
+          allowedProfiles: ["git-read", "git-write"],
+        },
+        limits: { gitPushInputBytes: 67108864 },
+        backend: {
+          kind: "github-token",
+          providerInstanceId: "fixture",
+          configVersion: "1",
+          repositoryId: "789",
+          repository: "example/project",
+          tokenFile,
+          developmentOnly: true,
+          pushRefAllowlist: ["refs/heads/agent/*"],
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const entry = (script, args) =>
+      spawnSync(process.execPath, [join(runtime, "dist", script), ...args], {
+        cwd: runtime,
+        env: { PATH: process.env.PATH },
+        encoding: "utf8",
+        timeout: 10000,
+      });
+    const checkConfig = "composition/repository-credentials/check-config.js";
+    const refused = entry(checkConfig, ["--check-config", tokenConfiguration]);
+    assert.deepEqual([refused.status, refused.stderr], [1, "invalid-configuration\n"]);
+    for (const result of [
+      entry(checkConfig, ["--check-config", tokenConfiguration, "--development-authority"]),
+      entry("repository-credentials.js", [
+        "--config",
+        tokenConfiguration,
+        "--check-config",
+        "--development-authority",
+      ]),
+    ]) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.includes(token), false);
+      assert.deepEqual(
+        (({ authority, tokenClass }) => ({ authority, tokenClass }))(JSON.parse(result.stdout)),
+        { authority: "github-token-development", tokenClass: "oauth" },
+      );
+    }
+    for (const args of [
+      ["--config", tokenConfiguration, "--check-config"],
+      ["--config", tokenConfiguration, "--check-config", "--bogus"],
+      ["--config", tokenConfiguration, "--development-authority", "--development-authority"],
+    ]) {
+      const result = entry("repository-credentials.js", args);
+      assert.deepEqual(
+        [result.status, result.stderr],
+        [1, "repository credential service failed\n"],
+        args.join(" "),
+      );
+    }
+    // A started development service names its authority and token class, never the token.
+    const development = spawn(
+      process.execPath,
+      [
+        ...reservedPortArgs(developmentReservation),
+        join(runtime, "dist/repository-credentials.js"),
+        "--config",
+        tokenConfiguration,
+        "--development-authority",
+      ],
+      {
+        cwd: runtime,
+        env: { PATH: process.env.PATH },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let developmentOutput = "";
+    development.stdout.on("data", (chunk) => (developmentOutput += chunk));
+    development.stderr.on("data", (chunk) => (developmentOutput += chunk));
+    const developmentExit = new Promise((resolve) =>
+      development.once("close", (code, signal) => resolve({ code, signal })),
+    );
+    try {
+      const deadline = Date.now() + 5000;
+      while (!developmentOutput.includes('"event":"started"') && Date.now() < deadline) {
+        await delay(10);
+      }
+      assert.ok(
+        developmentOutput.includes(
+          '{"event":"started","authority":"github-token-development","tokenClass":"oauth"}\n',
+        ),
+        "development service did not report its authority",
+      );
+      // The service reports "started" after its listeners are bound.
+      await developmentReservation.release();
+      development.kill("SIGTERM");
+      assert.deepEqual(await developmentExit, { code: 0, signal: null });
+      assert.equal(developmentOutput.includes(token), false);
+    } finally {
+      if (development.exitCode === null && development.signalCode === null) {
+        development.kill("SIGKILL");
+      }
+      await developmentExit;
+    }
     const manifest = JSON.parse(await readFile(join(runtime, "package.json"), "utf8"));
     assert.deepEqual(manifest.dependencies ?? {}, {});
     assert.deepEqual(
@@ -170,7 +290,12 @@ test(
     );
     const service = spawn(
       process.execPath,
-      [join(runtime, "dist/repository-credentials.js"), "--config", configuration],
+      [
+        ...reservedPortArgs(serviceReservation),
+        join(runtime, "dist/repository-credentials.js"),
+        "--config",
+        configuration,
+      ],
       {
         cwd: runtime,
         env: { PATH: process.env.PATH },
@@ -201,6 +326,8 @@ test(
         (await lstat(socket)).isSocket(),
         "emitted process did not bind its control socket",
       );
+      // The control socket is bound after the gateway port, so the hold can end.
+      await serviceReservation.release();
       const clientRoot = join(client, "dist/drivers/repo/github/credentials/client");
       const invoke = (entrypoint, args, input) =>
         spawnSync(process.execPath, [join(clientRoot, entrypoint), ...args], {

@@ -20,7 +20,6 @@ interface CredentialStorage {
     readonly namespaceId: string;
     readonly serviceAccountId: string;
     readonly accessToken: string;
-    readonly workspaceId: string;
   }): Promise<SecretReference>;
   deleteServiceAccountCredential(input: {
     readonly namespaceId: string;
@@ -67,9 +66,16 @@ export class ChatGPTServiceAccountDriver implements ServiceAccountDriver {
 
   async create(account: ServiceAccount): Promise<void> {
     const suffix = `-${account.id}`;
-    const external = await this.client.createServiceAccount({
-      name: `${account.name.slice(0, 200 - suffix.length)}${suffix}`,
-    });
+    // Cut by whole characters within the 200 UTF-16 code unit budget, so the cut never
+    // leaves half of a surrogate pair.
+    let prefix = "";
+    for (const character of account.name) {
+      if (prefix.length + character.length > 200 - suffix.length) {
+        break;
+      }
+      prefix += character;
+    }
+    const external = await this.client.createServiceAccount({ name: `${prefix}${suffix}` });
     this.controller.registerRollback(() => this.client.deleteServiceAccount(external.id));
     await this.query(
       `INSERT INTO occ.service_account_driver_bindings
@@ -110,7 +116,6 @@ export class ChatGPTServiceAccountDriver implements ServiceAccountDriver {
       namespaceId: account.namespaceId,
       serviceAccountId: account.id,
       accessToken: credential.accessToken,
-      workspaceId: linked.workspaceId,
     });
     this.controller.registerRollback(() =>
       this.compute.deleteServiceAccountCredential({
