@@ -9,7 +9,7 @@ author: freeqaz
 - **ID:** RFC-0019
 - **Owner:** freeqaz (proposal and auth review). Scope and release: OCE maintainers.
 - **Created:** 2026-10-04
-- **Last updated:** 2026-10-04
+- **Last updated:** 2026-10-07
 - **RFC PR:** [#1235](https://github.com/openclaw/openclaw-enterprise/pull/1235)
 - **Implementation plan:** none yet; delivery steps are listed below.
 - **Related:** [Authentication](../../docs/reference/authentication.md);
@@ -39,16 +39,15 @@ that a scoped person cannot use `occ` at all:
   ([client](../../internal/occclient/client.go) sends `x-api-key`). A browser session cannot
   reach the CLI: the controller rejects `Authorization`, and the documented session recipe
   is password-only.
-- A key can be issued only for an existing non-Agent ServicePrincipal. No API creates one,
-  so in practice that means the Installation-admin bootstrap principal; Agent principals
-  return `400`. Members get `403`, because issuance needs Installation `administer`.
+- Only an Installation administrator can issue a key, and only for an existing non-Agent
+  ServicePrincipal; members get `403`. Until #1600 nothing created one, so in practice only
+  the bootstrap admin principal had keys.
 - A key lasts 1 to 365 days (`expiresIn: 3600` returns `400 … at least 86400`). It
   represents the ServicePrincipal, not the person, so it survives the issuer's sign-out and
   disable.
 
-So the only CLI path for a person is an administrator holding a day-long admin key, which
-defeats the SSO goal of no long-lived keys and scoped access. Scoping works in the console
-and API (the round-15 matrix matched the docs), but not in the CLI.
+So a person gets no CLI, or a long-lived key that is not theirs, which defeats the SSO goal.
+Scoping works in the console and API, but not in the CLI.
 
 <a id="scope"></a>
 
@@ -62,12 +61,11 @@ and API (the round-15 matrix matched the docs), but not in the CLI.
   new step.
 - The flow is the same for every sign-in method and works on headless hosts (SSH,
   containers, port-forwarded installs).
-- Automation keeps service keys, unchanged.
 
 ## Non-goals
 
-- Creating ServicePrincipals or shortening key lifetimes (D386 option b). These are a
-  separate automation decision.
+- Shortening key lifetimes. Namespace ServicePrincipals for automation are #1600 (D386
+  option b).
 - Accepting IdP or GitHub tokens as OCC credentials, or making OCE a general OAuth server
   for third-party clients.
 - Down-scoping below the person's grants, beyond an optional Namespace pin. Read-only
@@ -129,10 +127,8 @@ _Proposed flow; nothing here is implemented._
   `503` and polls again. A consumed code cannot be replayed; a session whose response was
   lost shows in the person's list and the audit, and can be revoked.
 
-These routes are new and unrelated to the experimental
-`/namespaces/:ns/agents/device-authorizations` routes, where OCE is a device-flow _client_
-of the Codex issuer for Agent credentials. Only the console's code-display pattern is
-reused.
+These routes are unrelated to `/namespaces/:ns/agents/device-authorizations`, where OCE is a
+device-flow _client_ for Agent credentials; only its code display is reused.
 
 ### Credential shape and lifetime
 
@@ -247,17 +243,19 @@ exchange whose audit cannot be written returns `503` and issues nothing.
 - Resource events done through a CLI session record method `cli_session` and the session
   ID, so audit separates a person's console actions from their CLI actions.
 
-### Automation and CI
+### Automation, CI and Namespace keys
 
 CI and unattended automation keep
-[service API keys](../../docs/reference/authentication/service-api-keys.md); a CLI session
-needs interactive approval and ends with a person's session.
+[service API keys](../../docs/reference/authentication/service-api-keys.md). With #1600 an
+administrator can also give a member a Namespace ServicePrincipal key
+(`occ service-key create`). That key is an automation identity that lasts days and survives
+the issuer's sign-out; a CLI session is the person and ends with their browser session. An
+explicit key still wins in `occ`. A CLI session never issues keys (browser-only, above).
 
 ### Relation to RFC #924 (token service)
 
 RFC #924 leases _outbound_ upstream credentials, such as GitHub tokens, to Agents through
-Agent-scoped bearers. Interactive login and a public token API are outside its first
-delivery. This RFC issues _inbound_ OCC admission evidence to people. The two are
+Agent-scoped bearers. This RFC issues _inbound_ OCC admission evidence to people. The two are
 compatible and deliberately separate:
 
 - The controller verifies CLI sessions next to browser sessions and keys, never through
@@ -324,7 +322,7 @@ Required evidence:
 - **The IdP's device flow or token exchange** differs per provider; GitHub's would hand OCE
   a token with repository authority. Rejected.
 - **Pasting the browser cookie into `occ`:** no separate revocation or audit. Rejected.
-- **Per-person service keys** (D386 option b) need ServicePrincipal creation and still
+- **Per-person service keys** (#1600) are an automation identity, not the person, and
   outlive the session.
 - **Doing nothing** (option c) leaves scoped people with no CLI.
 
