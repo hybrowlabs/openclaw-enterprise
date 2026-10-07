@@ -1288,6 +1288,85 @@ test("a stored Installation name that breaks the Name rule stops before any writ
   assert.deepEqual(state.preflight.networkpolicies, {});
 });
 
+// JSON carries a control character to the Pod intact, so a line break in the stored
+// name gets the same Name rule refusal rather than a parse failure.
+test("a stored Installation name with a line break gets the Name rule refusal", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
+  const f = await fixture(t, {
+    controllerOnly: true,
+    installationName: "Production\n",
+    chart: { installation: (installation) => installation },
+  });
+  await assert.rejects(f.run(), (error) => {
+    for (const component of ["api", "worker"]) {
+      assert.match(
+        error.stderr,
+        new RegExp(
+          `the ${component} startup preflight stopped: The stored Installation name breaks the Name rule: 1 to 200 characters, .*\\. \\(INSTALLATION_NAME_INVALID\\) No OCC writer was stopped`,
+        ),
+      );
+    }
+    return true;
+  });
+  const state = await f.state();
+  assert.equal(state.api, 1);
+  assert.equal(state.worker, 1);
+  assert.equal(state.version, 1);
+  assert.deepEqual(await f.events(), []);
+  // The worker Pod this time: the #1556 test above reads the api Pod's value.
+  const pod = JSON.parse(await readFile(join(f.evidence, "preflight-worker-pod.json"), "utf8"));
+  assert.deepEqual(
+    pod.spec.containers[0].env.find(
+      (variable) => variable.name === "OCC_UPGRADE_PREFLIGHT_INSTALLATION_NAME",
+    ),
+    { name: "OCC_UPGRADE_PREFLIGHT_INSTALLATION_NAME", value: JSON.stringify("Production\n") },
+  );
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.networkpolicies, {});
+});
+
+// An OCC that returns no stored name cannot be checked, so the upgrade stops while
+// building the first preflight Pod, before it creates one or stops a writer.
+test("an Installation read without a stored name stops before any preflight Pod", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
+  const f = await fixture(t, {
+    controllerOnly: true,
+    installationName: null,
+    chart: { installation: (installation) => installation },
+  });
+  await assert.rejects(f.run(), (error) => {
+    assert.match(
+      error.stderr,
+      /upgrade-startup-preflight: OCC did not return the stored Installation name\./,
+    );
+    assert.match(
+      error.stderr,
+      /cannot build the api startup preflight Pod from the rendered chart; no OCC writer was stopped\./,
+    );
+    return true;
+  });
+  const state = await f.state();
+  assert.equal(state.api, 1);
+  assert.equal(state.worker, 1);
+  assert.equal(state.version, 1);
+  assert.deepEqual(await f.events(), []);
+  // Only the NetworkPolicy and Secret were created, and both are removed again.
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.networkpolicies, {});
+  assert.deepEqual(state.preflight.deleted.map((resource) => resource.split("/")[0]).sort(), [
+    "networkpolicy.networking.k8s.io",
+    "secret",
+  ]);
+});
+
 // Releases with the shared tenant namespace refuse to start on a single-cluster
 // Installation that still has split-layout Gateway storage. The startup preflight
 // runs that Compute check with the selected image before quiescence, so the old
