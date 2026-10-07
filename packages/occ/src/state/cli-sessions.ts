@@ -268,18 +268,12 @@ export class PostgresCliSessions {
       }
       const decided = authorization(row);
       const principalId = await this.principal(unit, approver.userId);
-      await this.audit(
-        unit,
-        `openclaw.auth.cli-sessions.${decision}`,
-        principalId,
-        requestId,
-        {
-          authorizationId: decided.id,
-          requesterAddress: decided.requesterAddress,
-          clientLabel: decided.clientLabel,
-          ...(decided.namespaceId === undefined ? {} : { namespaceId: decided.namespaceId }),
-        },
-      );
+      await this.audit(unit, `openclaw.auth.cli-sessions.${decision}`, principalId, requestId, {
+        authorizationId: decided.id,
+        requesterAddress: decided.requesterAddress,
+        clientLabel: decided.clientLabel,
+        ...(decided.namespaceId === undefined ? {} : { namespaceId: decided.namespaceId }),
+      });
       return decided;
     });
   }

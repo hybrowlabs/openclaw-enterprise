@@ -275,7 +275,9 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
         throw new CliRefusal(404, "NOT_FOUND", "CLI sign-in is not enabled on this controller.");
       }
       const result = await run();
-      reply.status(result.status ?? 200).send({ data: result.data, meta: { requestId: request.id } });
+      reply
+        .status(result.status ?? 200)
+        .send({ data: result.data, meta: { requestId: request.id } });
     } catch (error) {
       const refusal =
         error instanceof CliRefusal
@@ -309,7 +311,10 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
 
   function refuseCliCredentials(request: FastifyRequest): void {
     // A copied CLI token or key must not approve, list or revoke on the person's behalf.
-    if (request.headers[CLI_SESSION_HEADER] !== undefined || request.headers["x-api-key"] !== undefined) {
+    if (
+      request.headers[CLI_SESSION_HEADER] !== undefined ||
+      request.headers["x-api-key"] !== undefined
+    ) {
       throw browserOnly();
     }
   }
@@ -324,7 +329,8 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
       throw new CliRefusal(401, "UNAUTHENTICATED", "Send exactly one credential.");
     }
     const token = cliSessionHeader(headers);
-    const session = typeof token === "string" ? await store.verify(hashCliCredential(token)) : undefined;
+    const session =
+      typeof token === "string" ? await store.verify(hashCliCredential(token)) : undefined;
     if (session === undefined) {
       throw new CliRefusal(401, "UNAUTHENTICATED", "A valid CLI session is required.");
     }
@@ -366,7 +372,11 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
     return new Date(Math.min(new Date(browser.expiresAt).getTime(), capped)).toISOString();
   }
 
-  function pendingView(request: FastifyRequest, found: CliDeviceAuthorization, browser: AdmittedSession) {
+  function pendingView(
+    request: FastifyRequest,
+    found: CliDeviceAuthorization,
+    browser: AdmittedSession,
+  ) {
     return {
       clientLabel: found.clientLabel,
       requesterAddress: found.requesterAddress,
@@ -449,7 +459,11 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
         }
         // RFC 8628 slow_down, with a second of slack for timer jitter.
         if (previous !== undefined && now - previous < (CLI_POLL_INTERVAL_SECONDS - 1) * 1000) {
-          throw new CliRefusal(400, "SLOW_DOWN", "Polling too fast; wait 5 seconds longer between requests.");
+          throw new CliRefusal(
+            400,
+            "SLOW_DOWN",
+            "Polling too fast; wait 5 seconds longer between requests.",
+          );
         }
         const token = `occcli_${randomBytes(32).toString("base64url")}`;
         const result = await polls.admit(
@@ -457,15 +471,26 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
           () =>
             store.exchange(
               deviceCodeHash,
-              { tokenHash: hashCliCredential(token), maxLifetimeSeconds: settings.maxLifetimeSeconds },
+              {
+                tokenHash: hashCliCredential(token),
+                maxLifetimeSeconds: settings.maxLifetimeSeconds,
+              },
               request.id,
             ),
         );
         switch (result.status) {
           case "pending":
-            throw new CliRefusal(400, "AUTHORIZATION_PENDING", "Waiting for approval in the console.");
+            throw new CliRefusal(
+              400,
+              "AUTHORIZATION_PENDING",
+              "Waiting for approval in the console.",
+            );
           case "denied":
-            throw new CliRefusal(400, "ACCESS_DENIED", "The sign-in request was denied in the console.");
+            throw new CliRefusal(
+              400,
+              "ACCESS_DENIED",
+              "The sign-in request was denied in the console.",
+            );
           case "expired":
             throw new CliRefusal(
               400,
@@ -484,7 +509,11 @@ export function createCliSignIn(dependencies: CliSignInDependencies): CliSignIn 
               data: {
                 token,
                 session: publicSession(result.session),
-                user: { id: result.session.userId, email: result.session.email, name: result.session.name },
+                user: {
+                  id: result.session.userId,
+                  email: result.session.email,
+                  name: result.session.name,
+                },
               },
             };
           default:

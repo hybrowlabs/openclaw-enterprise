@@ -1941,7 +1941,10 @@ export async function createPostgresControllerAuth(
       );
   // RFC-0019 CLI sessions share the original State transaction and audit writer.
   const cliSessionStore = new PostgresCliSessions(
-    state ?? new PostgresPlatformState(pool as unknown as ConstructorParameters<typeof PostgresPlatformState>[0]),
+    state ??
+      new PostgresPlatformState(
+        pool as unknown as ConstructorParameters<typeof PostgresPlatformState>[0],
+      ),
     options.installationId,
     betterAuthIssuer(options.installationId),
     {

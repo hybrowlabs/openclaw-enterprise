@@ -1508,7 +1508,10 @@ export const cliDeviceAuthorizations = occSchema.table(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
   (table) => [
-    check("cli_device_authorization_id", sql`${table.id} ~ ${sql.raw(`'${cliResourceId("cda")}'`)}`),
+    check(
+      "cli_device_authorization_id",
+      sql`${table.id} ~ ${sql.raw(`'${cliResourceId("cda")}'`)}`,
+    ),
     check(
       "cli_device_authorization_device_code_hash",
       sql`${table.deviceCodeHash} ~ '^[a-f0-9]{64}$'`,
@@ -1579,7 +1582,10 @@ export const cliSessions = occSchema.table(
       "cli_session_authorization_id",
       sql`${table.authorizationId} ~ ${sql.raw(`'${cliResourceId("cda")}'`)}`,
     ),
-    check("cli_session_namespace_id", sql`${table.namespaceId} ~ ${sql.raw(`'${cliResourceId("ns")}'`)}`),
+    check(
+      "cli_session_namespace_id",
+      sql`${table.namespaceId} ~ ${sql.raw(`'${cliResourceId("ns")}'`)}`,
+    ),
     check("cli_session_client_label", sql`${table.clientLabel} ~ '^[\\x20-\\x7e]{1,64}$'`),
     check("cli_session_version_positive", sql`${table.version} > 0`),
     check("cli_session_method_version_positive", sql`${table.methodVersion} > 0`),

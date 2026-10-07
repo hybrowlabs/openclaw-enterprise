@@ -2634,11 +2634,19 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             // A copied CLI token must not mint or remove a key that outlives its session.
             const decisionReason =
               "Service API keys are issued and revoked from a browser session or a service key, never a CLI session.";
-            await denial(operation, request, "authorization_denial", context, undefined, undefined, {
-              decisionReason,
-              reasonCode: "CLI_SESSION_NOT_ALLOWED",
-              details: {},
-            });
+            await denial(
+              operation,
+              request,
+              "authorization_denial",
+              context,
+              undefined,
+              undefined,
+              {
+                decisionReason,
+                reasonCode: "CLI_SESSION_NOT_ALLOWED",
+                details: {},
+              },
+            );
             throw failure(403, "FORBIDDEN", decisionReason);
           }
           if (!creating && request.body !== undefined) {
