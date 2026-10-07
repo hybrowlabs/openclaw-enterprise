@@ -29,7 +29,8 @@
     "tests/integration/postgres-service-api-keys.test.mjs",
     "tests/integration/postgres-auth-binding.test.mjs",
     "tests/integration/postgres-cli-sessions.test.mjs",
-    "tests/integration/postgres-cli-sign-in.test.mjs"
+    "tests/integration/postgres-cli-sign-in.test.mjs",
+    "tests/integration/postgres-cli-login-console.test.mjs"
   ],
   "files": [
     {
@@ -183,6 +184,12 @@
       "path": "tests/integration/postgres-cli-sign-in.test.mjs",
       "expectedTests": [
         "occ login issues a CLI session that a person approves in the console and that ends with it"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-cli-login-console.test.mjs",
+      "expectedTests": [
+        "the Console approves, denies and refuses occ login codes and revokes CLI sessions"
       ]
     }
   ]
