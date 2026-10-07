@@ -8,13 +8,12 @@ status_note: "Retroactive record. #808, #814 and #824 landed on 2026-10-01 and i
 # Proposal: Keep dedicated Codex Gateways from acting on their own Pod
 
 - **ID:** RFC-0019
-- **Owner:** freeqaz (implementation PRs). Decision review: maintainers of the Kubernetes Compute Driver and the Harness runtime.
 - **Created:** 2026-10-01
-- **Last updated:** 2026-10-03
+- **Last updated:** 2026-10-07
 - **RFC PR:** [#853](https://github.com/openclaw/openclaw-enterprise/pull/853)
-- **Implementation:** landed [#808][pr-808], [#814][pr-814], [#824][pr-824]; open [#830][pr-830]. Follow-ups: [#874][pr-874], [#895][pr-895], [#896][pr-896]. Related Harness hardening: [#765][pr-765], [#796][pr-796].
+- **Implementation:** landed [#808][pr-808], [#814][pr-814], [#824][pr-824]; open [#830][pr-830]. Follow-ups: [#874][pr-874], [#895][pr-895], [#896][pr-896], [#1549][pr-1549]. Related Harness hardening: [#765][pr-765], [#796][pr-796].
 - **Related:** [Gateway–Harness storage split](0003-gateway-harness-storage-split.md), [Harness authentication bindings](0005-harness-auth-binding.md), [Dedicated Harness RWO workspace plan](../plans/38-harness-rwo-workspace-plan.md), [Workspace files flow](../../docs/flows/workspace-files.md).
-- **Source baseline:** `main` at `04d01d02e`; OpenClaw runtime pin `9d9c8568c` (`deploy/runtime/Dockerfile`).
+- **Source baseline:** `main` at `bf67a4317`; OpenClaw runtime pin `11d3d04a1` (`deploy/runtime/Dockerfile`).
 
 <a id="problem-and-decision"></a>
 
@@ -31,8 +30,9 @@ runtime entrypoint enforces this by rewriting the owner's OpenClaw config at
 every Gateway start. Codex thread state moves to the Harness volume so threads
 survive a restart.
 
-This is a retroactive record. Reviewers should accept or revise the landed
-design and decide the open continuation, #830.
+This is a retroactive record. Maintainers of the Kubernetes Compute Driver and
+the Harness runtime should accept or revise the landed design and decide the
+open continuation, #830.
 
 ## Context
 
@@ -104,7 +104,8 @@ only when `APP_SERVER_URL` names a remote Codex Harness.
    `occ agent logs` shows it as a warning; the Collector exports only the event
    name, as WARN. Deployment admission runs `requireCodexGatewayConfigurationShape`
    for dedicated Codex and refuses a shape the entrypoint cannot rewrite with
-   400 `INVALID_REQUEST` naming the setting path: a non-list
+   400 `INVALID_REQUEST` naming the setting path (a long provider key is cut to
+   fit the 256-character message cap, #1549): a non-list
    `codexDynamicToolsExclude`, a non-object Codex plugin `config`, `cron`,
    `cron.triggers`, `models` or `models.providers`, or a `codex`/`openai` row
    that is not an object or whose `models` is not a list of objects. The
@@ -248,6 +249,7 @@ The `openai` default-transport case was not run live.
   selected model); that is still true at head `4916f264c`. Keys
   such as `mediaModels`, `voiceModel`, heartbeat or compaction models and cron
   job models are still uncovered. Each new OpenClaw model key is another rule.
+  The branch now conflicts with main.
 - **Operator terminal.** The Control UI terminal panel still opens a Gateway
   shell, and the model can still open it in the operator's browser through
   `screen terminal_show` (without input).
@@ -258,8 +260,12 @@ The `openai` default-transport case was not run live.
   entrypoint will drop. The owner learns of it only from the
   `runtime.gateway_settings_overridden` warning at start; no Agent condition
   records it.
-- **Upstream drift.** The exclusion list and kept-key sets match OpenClaw
-  `9d9c8568c`; new upstream tools or transport fields need matching changes.
+- **Upstream drift.** The exclusion list and kept-key sets were written against
+  OpenClaw `9d9c8568c`. The pin has since moved to `6f91eda9c` (#1062)
+  and `11d3d04a1` (#1414) with neither set changed. The upstream
+  settings named here are still present at `11d3d04a1`, but the lists were not
+  re-derived and the live checks predate both bumps. New upstream tools or
+  transport fields need matching changes.
 
 ## Open questions for reviewers
 
@@ -294,3 +300,4 @@ The `openai` default-transport case was not run live.
 [pr-874]: https://github.com/openclaw/openclaw-enterprise/pull/874
 [pr-895]: https://github.com/openclaw/openclaw-enterprise/pull/895
 [pr-896]: https://github.com/openclaw/openclaw-enterprise/pull/896
+[pr-1549]: https://github.com/openclaw/openclaw-enterprise/pull/1549
