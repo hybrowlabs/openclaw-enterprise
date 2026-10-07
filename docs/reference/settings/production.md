@@ -134,7 +134,7 @@ the worker or initialization Job.
 | `OCC_AUTH_GITHUB_ALLOWED_TEAMS`    | `auth.github.allowedTeams`, comma-joined   | Optional `org/team-slug` entries whose active members may sign in. The GitHub App needs organization permission Members: read.                                                                                           |
 | `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                                                                                                    |
 | `OCC_AUTH_PASSWORD_SIGN_IN`        | `auth.passwordSignIn`                      | `all` (default, not rendered) or `recovery-only`: only the recovery account may use a password. Needs GitHub, Google or OIDC; see [recovery-only](../authentication/external-sign-in.md#recovery-only-password-sign-in). |
-| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.                                                                                                   |
+| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, subject to the limits below. Requests whose socket peer is inside them may carry forwarded headers.                                                                                  |
 | `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                                                                                                                 |
 | `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer.                                                                                     |
 
@@ -150,26 +150,29 @@ A non-empty list replaces the default, so an egress proxy on a link-local addres
 reached by listing its CIDR; the same holds for Google and OIDC. Listed CIDRs carry no
 link-local exception, so keep them narrow.
 
-`api.trustedProxy` is off by default: the API rejects `Forwarded`,
-`X-Forwarded-*`, and `X-Real-IP` with `403`. Failed password sign-ins are then
-limited per email only, because every browser behind a proxy shares its address.
-With GitHub, Google or OIDC, start, callback, and result then key on the browser's own
-cookies, not the address; start has no per-client limit, only an active cap and
-the 1,000 pending attempts. Startup logs `authentication.sign-in-limit-warning`,
-and Helm's install notes and the profile renderer warn; none of them fail. Set
-`api.trustedProxy` unless the API sees each client's own address. Presets:
+`api.trustedProxy` defaults off: `Forwarded`, `X-Forwarded-*`, and `X-Real-IP`
+return `403`. Failed password sign-ins have per-email limits only: browsers behind
+a proxy share its address. With GitHub, Google or OIDC, start, callback, and result
+key on browser cookies; start has only an active cap and the 1,000-pending-attempt
+cap. Startup logs `authentication.sign-in-limit-warning`; Helm notes and profile
+rendering also warn without failing. Set `api.trustedProxy` unless the API sees
+each client's address. Presets:
 
-- `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
-  is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
-- `aws`: an Application Load Balancer targeting API Pods; `cidrs` are its
-  subnets and the header is `x-forwarded-for`. A Network Load Balancer
-  preserves the client source and needs no preset unless it fronts ingress-nginx.
+- `ingress-nginx`: trust the ingress controller Pod CIDR; read `x-forwarded-for`.
+  Keep `use-forwarded-headers` off.
+- `aws`: trust Application Load Balancer subnets targeting API Pods; read
+  `x-forwarded-for`. A source-preserving Network Load Balancer needs no preset
+  unless it fronts ingress-nginx.
 - `generic`: `cidrs` and `clientAddressHeader`, such as `x-real-ip`, are required.
 
 Trust only proxies that overwrite or append the header, and admit them through
-`api.clients`. Rendering fails on incomplete GitHub values, an allowlist entry that is
+`api.clients`. Any IPv4-mapped IPv6 spelling counts as IPv4 (prefix 1–32).
+The API and chart refuse entries covering every IPv4 or IPv6 address, including
+`/0`. Mapped peers and header hops use dotted IPv4 sign-in limit keys.
+
+Rendering fails on incomplete GitHub values, an allowlist entry that is
 not an organization login or `org/team-slug`, more than 10 allowlist entries, a shared Secret,
-`agentNativeAdmin.enabled` with GitHub, `/0` proxy CIDRs, another header with a
+`agentNativeAdmin.enabled` with GitHub, refused proxy CIDRs, another header with a
 named preset, or credential, routing and internal headers such as `cookie`.
 
 ### Google sign-in

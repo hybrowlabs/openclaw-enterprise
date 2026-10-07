@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-10-06
-last_updated_session: authoring-run/8f5b1566-4538-437c-8e8a-fd2049050c6e
+updated: 2026-10-07
+last_updated_session: fix-678
 ---
 
 # Bootstrap and human authentication flow
@@ -203,8 +203,8 @@ it. A malformed, unbound, replayed, or expired callback is refused by
 `refuseUnmatched`, which writes no audit event and increments
 [`occ_sign_in_unmatched_callbacks_total`](../reference/metrics.md#application-families).
 Denials after `consumeAttempt` matches are audited as
-[`PROVIDER_UNAVAILABLE`](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
-or `EXTERNAL_IDENTITY_REJECTED`; with GitHub's
+[`PROVIDER_UNAVAILABLE`](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts),
+`EXTERNAL_IDENTITY_REJECTED` or `ACCOUNT_DISABLED`; with GitHub's
 [allowlist](../reference/authentication/external-sign-in.md#organization-and-team-allowlist),
 `apps/controller/src/auth/github.ts:githubMembership` runs between `GET /user` and the account
 lookup and adds `MEMBERSHIP_REQUIRED` and `MEMBERSHIP_UNAVAILABLE`, whose response code the
@@ -220,13 +220,18 @@ Google's signing keys through the same bounded transport, verifies the RS256 ID 
 signature, issuer, audience, expiry, and nonce (plus `hd` and `email_verified` when
 allowed domains are set), and returns only `sub`. Tokens and email are discarded.
 
-The controller route admits password sign-in before `/oce/password` runs, with the
-recovery email reserved like an administrator's. Start, callback, and result each have
-bounded process-local admission (`keyedAdmission`), shared by GitHub, Google and OIDC, keyed on
-the client address only behind a trusted proxy and otherwise on the browser's cookies. Provider HTTP shares a deadline and
-limits streamed response bytes; State bounds pending attempts and expired cleanup.
-State persists the attempt and session deadlines; cookie Max-Age subtracts
-monotonic elapsed work from them, and expired completion cannot release a cookie.
+`apps/controller/src/auth/client-address.ts:clientAddressConfiguration` canonicalizes
+IPv4-mapped addresses before prefix validation, refusing entries covering every
+IPv4 or IPv6 address. `resolveClientAddress` uses dotted IPv4 for mapped peers and
+header hops.
+
+Password sign-in enters controller admission before `/oce/password`, with the
+recovery email reserved like an administrator's. GitHub, Google and OIDC share bounded
+process-local start, callback and result admission (`keyedAdmission`), keyed on
+client addresses behind trusted proxies and browser cookies otherwise. Provider
+HTTP shares a deadline and response-byte cap; State bounds pending attempts and expired cleanup.
+State persists attempt and session deadlines; cookie Max-Age subtracts monotonic
+elapsed work. Expired completion releases no cookie.
 
 `scripts/auth-maintain.mjs` parses arguments with
 `scripts/lib/auth-maintain-arguments.mjs:parseAuthMaintainArguments` before
@@ -339,6 +344,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 10:10: Treat IPv4-mapped trusted proxies as IPv4; refuse catch-all proxy CIDRs. (fix-678 - bf67a4317)
 
 - 2026-10-06 07:30: Reject undeclared maintenance commands before configuration. (authoring-run/8f5b1566-4538-437c-8e8a-fd2049050c6e - 4bacc7925fcef75ea8715905a0c6c86abb7203d2)
 
