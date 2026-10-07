@@ -100,9 +100,9 @@ desired state, queues work and, through the API, appends the deploy audit event.
 4. Create `binding_<revisionId>_deployer_read`: subject the caller, that Role,
    target the new revision. The IAM Driver's ordinary checks apply (subject rule,
    target lock, Namespace lock).
-5. If the caller cannot be a Namespace binding subject (an Installation-scoped
-   ServicePrincipal), remove the Role created in step 3, if any, and continue the
-   deploy without a grant.
+5. If the caller cannot be a Namespace binding subject (for example an
+   Installation-scoped ServicePrincipal), remove the Role created in step 3, if
+   any, and continue the deploy without a grant.
 
 **Audit.** The deploy event lists the binding in `details.grantedAccessBindings`,
 with the same fields as `removedAccessBindings` (ID, subject, Role, target). The
