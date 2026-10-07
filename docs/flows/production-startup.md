@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: "2026-10-01"
-last_updated_session: "authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44"
+updated: "2026-10-05"
+last_updated_session: "authoring-run/54e33467-f3d2-4f4e-afad-952157ec12f0"
 ---
 
 # Production Startup Flow
@@ -99,13 +99,13 @@ images from Helm values or rewrite Driver configuration.
 
 `scripts/prepare-bootstrap-volume:124`
 
-Before the first install, the operator creates the bootstrap PVC named by
-`bootstrap.password.claimName` and runs the helper with explicit kubeconfig,
-context, namespace, claim, approved Node-capable image, and optional repeated
-`--node-selector KEY=VALUE` labels. The helper launches a bounded preparation
-Pod, applies the selectors before WaitForFirstConsumer storage binds, verifies
-the mounted root is fresh except for filesystem-owned `lost+found`, sets UID/GID
-`1000` with mode `0700`, and refuses to continue on any other entry.
+Before the first install, the operator creates the `bootstrap.password.claimName`
+PVC and runs the helper with explicit kubeconfig, context, namespace, claim,
+approved Node-capable image, and optional `--node-selector KEY=VALUE` labels.
+The preparation Pod preserves string namespaces and selector keys, applying selectors
+before WaitForFirstConsumer binding. The helper requires a fresh
+root except for filesystem-owned `lost+found`, sets UID/GID `1000` with mode
+`0700`, and refuses other entries.
 
 If cluster policy forbids the helper Pod, storage administration owns the same
 state transition through an approved storage workflow. A preprepared claim goes
@@ -122,12 +122,11 @@ and the later dependency, collector, Slack proxy, and Envoy policies allow
 UDP/TCP ports `53` and `5353` to the configured DNS peer; see the
 [Helm DNS contract](../reference/settings/production.md#required-production-controller-environment).
 
-`helm upgrade --install --wait --timeout 5m` renders the chart with native
-values. If `database.caSecretName` is set, the Pod mounts that CA Secret
-read-only into both containers before they connect. The initialization hook first
-runs migrations with the dedicated migrator credential, then runs bootstrap with
-the lower-privilege application credential, Better Auth settings, first
-administrator email, Installation name, and protected output paths.
+The Helm initialization hook preserves the full release name and shortens its
+suffix to Kubernetes' 63-character limit. Both containers mount
+`database.caSecretName` read-only when configured. Migration uses the migrator
+credential; bootstrap uses the lower-privilege application credential, Better Auth
+settings, administrator email, Installation name, and protected output paths.
 
 `scripts/migrate-production.mjs:1`, `scripts/migration-history.mjs:migrateWithHistory`
 
@@ -165,13 +164,26 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint.
+operator-managed endpoint. A `/healthz` startup probe (1-second period, 120
+failures) gives the API 2 minutes to listen and lets readiness start within a
+second of listening.
+
+`apps/controller/src/index.ts:createFastifyApp`
+
+On `SIGTERM` the API stops accepting connections and finishes admitted requests.
+Their responses carry `Connection: close` (a streamed one closes its connection
+when it ends), so the process exits without waiting out the 72-second keep-alive.
+The single `Recreate` replica keeps the default 30-second termination grace and
+no `preStop` hook, since no peer takes its traffic; a request still running after
+30 seconds is cut off. The API logs `shutdown.started` with the `signal`, then
+`shutdown.completed` with `durationMs` once every close hook has finished; a
+failed close logs `shutdown.failed` and exits `1`. A log ending at
+`shutdown.started` means the grace period cut the drain off.
 
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
-Job that runs the migration init container and bootstrap container, so production
-operators can keep migration, bootstrap, API, and worker Pods on a reviewed
-control-plane node pool.
+Job (migration and bootstrap), so all four stay on a reviewed control-plane node
+pool.
 `deploy/helm/openclaw-enterprise/templates/gateway-routing.yaml` also projects
 that selector into `EnvoyProxy.spec.provider.kubernetes.envoyDeployment.pod`,
 so the credential-checking private proxy stays on the trusted pool.
@@ -211,10 +223,9 @@ minimum versions in its message and continues. An invalid version response,
 unreachable API, or failed Namespace access still fails preflight.
 
 The worker independently validates production settings, opens the same
-application-role database, loads the selected Driver bundle, validates IAM, runs
-Compute preflight, emits the same advisory warning for an older Kubernetes
-server, emits `worker.started`, and polls durable Namespace and AgentRevision
-work. Worker readiness depends on fresh queue-health observations. Neither
+application-role database, loads the selected Drivers, validates IAM, runs
+Compute preflight (with the same advisory warning), emits `worker.started`, and
+polls durable Namespace and AgentRevision work. Worker readiness depends on fresh queue-health observations. Neither
 process mounts the bootstrap PVC.
 
 `apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
@@ -268,29 +279,31 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 - `kubectl -n openclaw-system wait --for=condition=complete job/oce-initialization`
   should succeed before API and worker rollout checks.
 - `pnpm db:migrate:production --check` reports the accepted database history
-  without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` requires inspection of
-  the selected database; initialization does not repair or rewrite its ledger.
+  without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` needs the database
+  inspected; initialization never repairs its ledger.
 - The API should emit `listening`; the worker should emit `worker.started`
-  followed by `worker.health`.
-- `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
-  identifies a server below the supported Kubernetes 1.35 baseline; startup
-  continues, but operators should upgrade before treating the deployment as
-  supported.
+  followed by `worker.health`. `listening` carries `startupMs` since process
+  start and `phasesMs` per startup phase, so a slow boot names its slow phase.
+  A stopping API emits `shutdown.started` and then `shutdown.completed`.
+- `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`:
+  startup continues, but upgrade to Kubernetes 1.35 or later for support.
 - `startup-error` or `worker.startup-error` with code
   `KUBERNETES_API_UNAVAILABLE` means the Compute preflight got no answer from
   the Kubernetes API server named by `host` and `port`. Check that
   `cluster.cidrs` still lists that address; a restarted cluster can move it.
+- Code `PRESET_FILE_INVALID`: a bad `presets.files` list or file (missing,
+  unreadable, malformed, invalid, duplicate).
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
-  first check for unsafe output storage, existing output files, database-role
-  failures, auth origin errors, and administrator/IAM mismatch.
+  first check for unsafe output storage, existing outputs, database-role
+  failures, auth errors (`AUTH_SECRET_INVALID`, `AUTH_BASE_URL_INVALID`), and
+  administrator/IAM mismatch.
 - `occ installation get` must display an `ID` equal to `meta.installationId`
   from the retrieved key file.
 - Changing an external startup Secret alone does not restart the API or worker;
   run an explicit rollout and repeat readiness plus authenticated proof.
-- Packaging checks such as
-  `node --test tests/integration/production-kubernetes-packaging.test.mjs`
-  render chart behavior but do not prove a live Helm install, protected storage
-  retrieval, tenant runtime, or model turn.
+- `tests/integration/production-kubernetes-packaging.test.mjs` renders the
+  chart; it does not prove a live install, key retrieval, tenant runtime, or
+  model turn.
 
 ## Related docs
 
@@ -310,6 +323,15 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-05 12:10: Bound initialization hook names for valid long Helm releases. (authoring-run/54e33467-f3d2-4f4e-afad-952157ec12f0 - 4cda6515736280ca39f0fbe92cff78194b2c3638)
+- 2026-10-05 06:59: Preserve bootstrap Pod namespace strings. (01a0f9e4-a0bf-76f1-acdb-e6b55ada490a - 66a4a07028fd0a08c29ea80e8f95cadc48a74932)
+
+- 2026-10-05: Name Preset file failures `PRESET_FILE_INVALID`.
+- 2026-10-04: Poll the startup probe every second.
+- 2026-10-04: Time API startup phases in `listening`.
+- 2026-10-04: Add the API startup probe.
+- 2026-10-04: Log the API's shutdown start and completion.
+- 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
 - 2026-09-29: Merge current main into release-scoped shared egress documentation. (PR-187)
 

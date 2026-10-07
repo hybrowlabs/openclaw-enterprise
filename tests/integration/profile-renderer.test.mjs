@@ -99,6 +99,20 @@ function managedCodexInput(overrides = {}) {
   });
 }
 
+function repositoryConfiguration(upstreamCidrs = ["192.0.2.30/32"]) {
+  return {
+    enabled: true,
+    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
+    backendId: "github-primary",
+    registryConfigMapName: "occ-repository-registry-v1",
+    serviceConfigSecretName: "occ-repository-service-config",
+    appKeySecretName: "occ-repository-app-key",
+    tlsSecretName: "occ-repository-tls",
+    publicCaSecretName: "occ-repository-public-ca",
+    upstreamCidrs,
+  };
+}
+
 function render(
   profile,
   input,
@@ -229,16 +243,20 @@ test("renderer supports exactly the openclaw and codex profiles", () => {
 
 // Tenant runtimes may burst to four cores; 100m requests keep the scheduling
 // reservation unchanged. The production example carries the same values.
-const tenantRuntimeResources = {
+const containerDefaultResources = {
   requests: { cpu: "100m", memory: "128Mi" },
   limits: { cpu: "4", memory: "2Gi" },
 };
-// An OpenClaw Gateway settles near 1.2 GiB once it has served a few turns, so
-// its memory request reserves that much. A dedicated Codex Gateway with native
-// admin chat peaked at 1.9 GiB and was OOM-killed at 2Gi, so its limit is 3Gi.
+// Memory requests cover measured use between turns and limits cover measured
+// peaks (see the renderer): Gateways hold 1.2-1.6 GiB and peak at 2.2 GiB; a
+// Codex Harness holds about 0.5 GiB and reached a 4 GiB limit building and testing.
 const gatewayResources = {
-  requests: { cpu: "100m", memory: "1280Mi" },
+  requests: { cpu: "100m", memory: "1792Mi" },
   limits: { cpu: "4", memory: "3Gi" },
+};
+const harnessResources = {
+  requests: { cpu: "100m", memory: "768Mi" },
+  limits: { cpu: "4", memory: "6Gi" },
 };
 
 test("profiles give tenant runtimes four-core CPU limits over unchanged 100m requests", () => {
@@ -255,10 +273,10 @@ test("profiles give tenant runtimes four-core CPU limits over unchanged 100m req
   ]) {
     const { resources } = installation.drivers.compute.configuration;
     assert.deepEqual(resources.gateway, gatewayResources, `${name} Gateway`);
-    assert.deepEqual(resources.agent, tenantRuntimeResources, `${name} Harness`);
+    assert.deepEqual(resources.agent, harnessResources, `${name} Harness`);
     assert.deepEqual(
       resources.namespace.containerDefaults,
-      tenantRuntimeResources,
+      containerDefaultResources,
       `${name} namespace container default`,
     );
     assert.deepEqual(resources.namespace.quota, { pods: "10" }, `${name} quota`);
@@ -352,17 +370,7 @@ test("both profiles preserve provider ranges and public Slack egress", { skip: h
   for (const profile of ["openclaw", "codex"]) {
     // Provider ranges must survive rendering; individual DNS answers are not stable.
     const input = profile === "codex" ? codexInput() : baseInput();
-    input.repository = {
-      enabled: true,
-      image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-      backendId: "github-primary",
-      registryConfigMapName: "occ-repository-registry-v1",
-      serviceConfigSecretName: "occ-repository-service-config",
-      appKeySecretName: "occ-repository-app-key",
-      tlsSecretName: "occ-repository-tls",
-      publicCaSecretName: "occ-repository-public-ca",
-      upstreamCidrs: ["140.82.112.0/20", "192.30.252.0/22"],
-    };
+    input.repository = repositoryConfiguration(["140.82.112.0/20", "192.30.252.0/22"]);
     const output = render(profile, input);
     const manifests = helmTemplate(output);
     assert.match(manifests, /repository-credentials/);
@@ -446,17 +454,7 @@ test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () 
   const repositoryOutput = render(
     "codex",
     managedCodexInput({
-      repository: {
-        enabled: true,
-        image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-        backendId: "github-primary",
-        registryConfigMapName: "occ-repository-registry-v1",
-        serviceConfigSecretName: "occ-repository-service-config",
-        appKeySecretName: "occ-repository-app-key",
-        tlsSecretName: "occ-repository-tls",
-        publicCaSecretName: "occ-repository-public-ca",
-        upstreamCidrs: ["192.0.2.30/32"],
-      },
+      repository: repositoryConfiguration(),
     }),
   );
   const collision = join(repositoryOutput.directory, "secret-collision.yaml");
@@ -518,17 +516,7 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
   const output = render(
     "codex",
     codexInput({
-      repository: {
-        enabled: true,
-        image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-        backendId: "github-primary",
-        registryConfigMapName: "occ-repository-registry-v1",
-        serviceConfigSecretName: "occ-repository-service-config",
-        appKeySecretName: "occ-repository-app-key",
-        tlsSecretName: "occ-repository-tls",
-        publicCaSecretName: "occ-repository-public-ca",
-        upstreamCidrs: ["192.0.2.30/32"],
-      },
+      repository: repositoryConfiguration(),
     }),
   );
   assert.equal(output.summary.ok, true);
@@ -546,17 +534,7 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
 });
 
 test("repository serviceName is left to the chart so its upgrade guard applies", () => {
-  const repositoryInput = {
-    enabled: true,
-    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-    backendId: "github-primary",
-    registryConfigMapName: "occ-repository-registry-v1",
-    serviceConfigSecretName: "occ-repository-service-config",
-    appKeySecretName: "occ-repository-app-key",
-    tlsSecretName: "occ-repository-tls",
-    publicCaSecretName: "occ-repository-public-ca",
-    upstreamCidrs: ["192.0.2.30/32"],
-  };
+  const repositoryInput = repositoryConfiguration();
   const omitted = render("codex", codexInput({ repository: repositoryInput }));
   assert.doesNotMatch(omitted.values, /serviceName: git/);
   if (!helmSkip) {
@@ -665,6 +643,162 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     }),
     /controlPlane.agentNativeAdminDomain must be inside controlPlane.sharedCookieDomain/,
   );
+
+  assertPreflightFailure(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "https://console.example.internal",
+      },
+    }),
+    /controlPlane.authBaseUrl host must be inside controlPlane.sharedCookieDomain/,
+  );
+
+  // The API refuses a public-suffix cookie domain at startup (tldts, private registries
+  // included); preflight uses the same list. Helm has none, so the chart renders these.
+  const nativeAdminUnder = (sharedCookieDomain) =>
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: `https://console.${sharedCookieDomain}`,
+        agentNativeAdminDomain: `agents.${sharedCookieDomain}`,
+        sharedCookieDomain,
+      },
+    });
+  for (const sharedCookieDomain of ["co.uk", "github.io", "CO.UK", "192.0.2.1"]) {
+    assertPreflightFailure(
+      "codex",
+      nativeAdminUnder(sharedCookieDomain),
+      /controlPlane.sharedCookieDomain must not be a public suffix/,
+    );
+  }
+  for (const sharedCookieDomain of ["example.co.uk", "oce.github.io"]) {
+    assert.equal(render("codex", nativeAdminUnder(sharedCookieDomain)).summary.ok, true);
+  }
+
+  assertPreflightFailure(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "http://console.oce.example.internal",
+      },
+    }),
+    /controlPlane.authBaseUrl must use HTTPS with native admin/,
+  );
+
+  // The API and the bootstrap Job accept only an absolute HTTP(S) origin.
+  for (const authBaseUrl of [
+    "https://console.oce.example.internal/occ",
+    "https://console.oce.example.internal?next=1",
+    "https://console.oce.example.internal#console",
+    // An empty query or fragment, which the API's URL serialization keeps (https://host/?).
+    "https://console.oce.example.internal?",
+    "https://console.oce.example.internal/?",
+    "https://console.oce.example.internal#",
+    "https://console.oce.example.internal/#",
+    " https://console.oce.example.internal? ",
+    "https://admin@console.oce.example.internal",
+    "ftp://console.oce.example.internal",
+    "console.oce.example.internal",
+    // Stricter than the API, like the chart: URL parsing repairs these into an origin.
+    "https:console.oce.example.internal",
+    "https://console.oce.example.internal/.",
+    "https://console.oce.example.internal/%2e",
+    // Like the chart: Unicode spaces and invisible characters at either end, which URL
+    // parsing keeps (it strips only C0 controls and spaces). URL parsing already refuses most
+    // of these, and a trailing unassigned code point (U+0378); a trailing U+FEFF or U+200B,
+    // which the host parser drops, is refused by the edge rule alone.
+    ...["\u00a0", "\u2003", "\u3000", "\ufeff", "\u200b"].flatMap((space) => [
+      `${space}https://console.oce.example.internal`,
+      `https://console.oce.example.internal${space}`,
+      ` ${space}https://console.oce.example.internal${space} `,
+    ]),
+    "https://console.oce.example.internal\u0378",
+    // Like the chart: spaces, < and > and invisible characters inside the host. The host parser
+    // refuses spaces, < and >, and drops tabs and most invisible characters.
+    ...[
+      " ",
+      "<",
+      ">",
+      "\u00a0",
+      "\u2003",
+      "\u3000",
+      "\u2028",
+      "\t",
+      "\ufeff",
+      "\u200b",
+      "\u00ad",
+    ].map((space) => `https://console${space}.oce.example.internal`),
+  ]) {
+    assertPreflightFailure(
+      "codex",
+      codexInput({ controlPlane: { ...baseInput().controlPlane, authBaseUrl } }),
+      /controlPlane.authBaseUrl must be an absolute HTTP\(S\) origin URL without a path, query, fragment, or user info/,
+    );
+  }
+  // The API accepts these, and so does the renderer: ASCII spaces and tabs at the ends, which
+  // URL parsing strips, and hosts with non-ASCII letters, including the joiners U+200C and
+  // U+200D that some IDN labels need.
+  for (const authBaseUrl of [
+    " \thttps://console.oce.example.internal\t ",
+    "https://bücher.oce.example.internal",
+    "https://\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.oce.example.internal",
+    "https://\u0915\u094d\u200d\u0937.oce.example.internal",
+  ]) {
+    const output = render(
+      "codex",
+      codexInput({ controlPlane: { ...baseInput().controlPlane, authBaseUrl } }),
+    );
+    assert.equal(output.summary.ok, true, output.preflight.errors.join("\n"));
+  }
+  // An unparsable value is reported once, not again by the native admin checks.
+  const error = renderError(() =>
+    render(
+      "codex",
+      codexInput({
+        controlPlane: { ...baseInput().controlPlane, authBaseUrl: "console.oce.example.internal" },
+      }),
+    ),
+  );
+  const preflight = JSON.parse(
+    readFileSync(join(error.profileRendererDirectory, "preflight.json"), "utf8"),
+  );
+  assert.deepEqual(
+    preflight.errors.filter((message) => message.includes("authBaseUrl")),
+    [
+      "controlPlane.authBaseUrl must be an absolute HTTP(S) origin URL without a path, query, fragment, or user info.",
+    ],
+  );
+});
+
+// The API lowercases both domains at startup, and the chart accepts only lowercase.
+test("native admin domains render lowercase for the chart", () => {
+  const output = render(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "https://Console.Example.co.uk",
+        agentNativeAdminDomain: "Agents.Example.co.uk",
+        sharedCookieDomain: "Example.co.uk",
+      },
+    }),
+  );
+  assert.equal(output.summary.ok, true, output.preflight.errors.join("\n"));
+  assert.match(
+    output.values,
+    /agentNativeAdmin:\n {2}enabled: true\n {2}domain: agents\.example\.co\.uk\n {2}sharedCookieDomain: example\.co\.uk\n/,
+  );
+  if (!helmSkip) {
+    const manifests = helmTemplate(output);
+    assert.match(
+      manifests,
+      /name: OCC_AGENT_NATIVE_ADMIN_DOMAIN\n\s+value: "agents\.example\.co\.uk"/,
+    );
+    assert.match(manifests, /name: OCC_AUTH_COOKIE_DOMAIN\n\s+value: "example\.co\.uk"/);
+  }
 });
 
 test("profiles pass an optional observability URL to Installation startup YAML", async () => {
@@ -736,6 +870,35 @@ test(
     assert.match(manifests, /name: OCC_AUTH_GITHUB_CLIENT_ID/);
     assert.match(manifests, /name: OCC_AUTH_GITHUB_RECOVERY_USER_ID\n\s+value: "recovery-admin_1"/);
     assert.match(manifests, /name: OCC_AUTH_TRUSTED_PROXY_CIDRS\n\s+value: "10\.42\.0\.0\/16"/);
+    assert.doesNotMatch(manifests, /OCC_AUTH_GITHUB_ALLOWED_/);
+    // The API reads the scheme as URL parsing does, so an uppercase HTTPS origin is valid.
+    const uppercase = render(
+      "openclaw",
+      externalSignInInput({ trustedProxy, authBaseUrl: "HTTPS://Console.OCE.example.internal" }),
+    );
+    assert.equal(uppercase.summary.ok, true, uppercase.preflight.errors.join("\n"));
+    assert.match(
+      helmTemplate(uppercase),
+      /name: OCC_AUTH_BASE_URL\n\s+value: "HTTPS:\/\/Console\.OCE\.example\.internal"/,
+    );
+    const allowlisted = render(
+      "openclaw",
+      externalSignInInput({
+        trustedProxy,
+        github: { allowedOrgs: ["acme"], allowedTeams: ["other/platform"] },
+      }),
+    );
+    assert.equal(allowlisted.summary.ok, true, allowlisted.preflight.errors.join("\n"));
+    assert.match(
+      allowlisted.values,
+      /allowedOrgs:\n {6}- acme\n {4}allowedTeams:\n {6}- other\/platform/,
+    );
+    const allowlistManifests = helmTemplate(allowlisted);
+    assert.match(allowlistManifests, /name: OCC_AUTH_GITHUB_ALLOWED_ORGS\n\s+value: "acme"/);
+    assert.match(
+      allowlistManifests,
+      /name: OCC_AUTH_GITHUB_ALLOWED_TEAMS\n\s+value: "other\/platform"/,
+    );
     // Password sign-in stays open to every account unless recovery-only is chosen.
     assert.doesNotMatch(github.values, /passwordSignIn/);
     assert.doesNotMatch(manifests, /OCC_AUTH_PASSWORD_SIGN_IN/);
@@ -799,6 +962,25 @@ test(
     assert.match(oidcManifests, /name: OCC_AUTH_OIDC_TOKEN_AUTH\n\s+value: "client_secret_basic"/);
     assert.match(oidcManifests, /name: OCC_AUTH_OIDC_DISPLAY_NAME\n\s+value: "Acme SSO"/);
     assert.match(oidcManifests, /name: openclaw-enterprise-api-oidc-login-egress/);
+    // The API trims each OIDC URL with JavaScript's trim before its checks, and so do the chart
+    // and the renderer, which keep the value as written.
+    const padded = render(
+      "openclaw",
+      externalSignInInput({
+        github: undefined,
+        oidc: {
+          issuer: " https://sso.example.com/realms/acme ",
+          authorizationUrl: "\thttps://sso.example.com/realms/acme/protocol/openid-connect/auth",
+          tokenUrl: "\u00a0https://sso.example.com/realms/acme/protocol/openid-connect/token\ufeff",
+          jwksUrl: "https://sso.example.com/realms/acme/protocol/openid-connect/certs\u3000",
+        },
+      }),
+    );
+    assert.equal(padded.summary.ok, true, padded.preflight.errors.join("\n"));
+    assert.match(
+      helmTemplate(padded),
+      /name: OCC_AUTH_OIDC_ISSUER\n\s+value: " https:\/\/sso\.example\.com\/realms\/acme "/,
+    );
 
     // Password-only installs behind ingress-nginx keep native admin and still trust the proxy.
     const nativeAdmin = render(
@@ -827,6 +1009,18 @@ test("preflight warns, without failing, when no trusted proxy is set", () => {
 });
 
 test("preflight rejects external sign-in and trusted proxy inputs Helm would reject", () => {
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ github: { allowedTeams: ["platform"] } }),
+    /controlPlane.github.allowedTeams\[0\] must be a lowercase org\/team-slug entry/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({
+      github: { allowedOrgs: Array.from({ length: 11 }, (_, index) => `org${index}`) },
+    }),
+    /allowedOrgs and allowedTeams list at most 10 entries together/,
+  );
   assertPreflightFailure(
     "openclaw",
     externalSignInInput({ recoveryUserId: undefined }),
@@ -874,6 +1068,30 @@ test("preflight rejects external sign-in and trusted proxy inputs Helm would rej
       /controlPlane.oidc.issuer must be an https URL/,
     ],
     [{ issuer: "https://203.0.113.10/" }, /controlPlane.oidc.issuer must be an https URL/],
+    // Like the chart and the API: an explicit port on the issuer, and a value padded with
+    // U+0085, which JavaScript's trim keeps.
+    [
+      { issuer: "https://tenant.idp.example.test:443/" },
+      /controlPlane.oidc.issuer must be an https URL/,
+    ],
+    [
+      { issuer: "\u0085https://tenant.idp.example.test/" },
+      /controlPlane.oidc.issuer must be an https URL/,
+    ],
+    // Like the chart, though URL parsing repairs these into the issuer's host: a tab or a
+    // percent-escape in the host, backslashes, and a host that is not spelled in ASCII.
+    ...[
+      "https://tenant.idp.exam\tple.test/",
+      "https://tenant.idp.example.%74est/",
+      "https:\\\\tenant.idp.example.test\\",
+      "https://tenant.idp.examplé.test/",
+      // A host longer than 253 characters.
+      `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(60)}.test/`,
+    ].map((issuer) => [{ issuer }, /controlPlane.oidc.issuer must be an https URL/]),
+    [
+      { tokenUrl: "https://tenant.idp.exam\tple.test/oauth/token" },
+      /controlPlane.oidc.tokenUrl must be an https URL on port 443 on the issuer's host/,
+    ],
     [
       { tokenUrl: "https://other.example.test/token" },
       /controlPlane.oidc.tokenUrl must be an https URL on port 443 on the issuer's host/,

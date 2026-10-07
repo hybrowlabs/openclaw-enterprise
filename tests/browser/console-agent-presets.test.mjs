@@ -41,6 +41,7 @@ import {
   routeInstallationWithoutProvisioning,
   agentPostRequests,
   optionValues,
+  waitForCreateFormReads,
 } from "./console-agents-test-support.mjs";
 
 const defaultCodexPreset = JSON.parse(
@@ -946,6 +947,12 @@ test("Plugin approval choices explain unsupported provider modes and preserve th
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: "occ-plugin:diffs", exact: true }).click();
   const approval = dialog.getByLabel("occ-plugin:diffs require approval for", { exact: true });
+  // Every mode stays disabled until the provider's capabilities load; the hint shows they have.
+  await dialog
+    .getByText("This plugin provider does not support: Every action, Write actions.", {
+      exact: true,
+    })
+    .waitFor();
   assert.equal(await approval.inputValue(), "write_actions");
   assert.deepEqual(
     await approval
@@ -959,11 +966,6 @@ test("Plugin approval choices explain unsupported provider modes and preserve th
       ["none", false],
     ],
   );
-  await dialog
-    .getByText("This plugin provider does not support: Every action, Write actions.", {
-      exact: true,
-    })
-    .waitFor();
   assert.equal(
     await approval.locator("option:checked").textContent(),
     "Write actions (unsupported)",
@@ -1281,6 +1283,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     ),
     false,
   );
+  await waitForCreateFormReads(page);
   assert.equal(await save.isEnabled(), true);
   assert.equal(
     await page.getByLabel("AGENTS.md", { exact: true }).inputValue(),
@@ -1343,6 +1346,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
+  // Returning to the draft restores or remounts it; wait for the live form's reads.
+  await waitForCreateFormReads(page);
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
   // Plugin catalog discovery is a read sent as POST. A mounted draft with the rendered codex_pat
   // Secret prefetches it after a 300 ms debounce, so it may or may not have been sent yet.
@@ -2478,7 +2483,7 @@ test("an empty Namespace can create an Agent without a Preset", async (t) => {
   await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByText(/No Presets in this Namespace/).waitFor();
+  await page.getByText(/^No Presets available to you in this Namespace\./).waitFor();
   assert.equal(
     await page.getByRole("button", { name: "Start with default Preset" }).isDisabled(),
     true,
@@ -2661,7 +2666,7 @@ test("denied Preset reads do not automatically start an Agent form", async (t) =
   // A later list filters the now-unreadable Preset; the independent action remains available.
   await page.getByRole("link", { name: "← Agents" }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
-  await page.getByText(/No Presets in this Namespace/).waitFor();
+  await page.getByText(/^No Presets available to you in this Namespace\./).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });
@@ -2680,7 +2685,7 @@ test("The console requires a readable installed default for quick-start and stil
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page
-    .getByText("Choose a Preset. default-codex is not available in this Namespace.", {
+    .getByText("Choose a Preset. default-codex is not available to you in this Namespace.", {
       exact: true,
     })
     .waitFor();
@@ -2691,4 +2696,57 @@ test("The console requires a readable installed default for quick-start and stil
   await page.getByLabel("Preset template", { exact: true }).selectOption(alternative.data.id);
   await page.getByRole("button", { name: "Use Preset" }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Custom Agent");
+});
+
+test("Preset with a managed PAT account creates a draft without a Secret grant", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Managed account Preset", { ready: true });
+  // Account issuance is outside this browser test. Association before issuance is
+  // supported; this proves Preset rendering and draft creation, not deployment.
+  const account = await fixture.controller.transact((state) =>
+    state.serviceAccounts.createServiceAccount({
+      id: `sa_${crypto.randomUUID()}`,
+      namespaceId: namespace.id,
+      name: "Preset research account",
+    }),
+  );
+  const harnessAuth = {
+    method: "codex_pat",
+    source: { kind: "service_account", namespaceId: namespace.id, id: account.id },
+  };
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
+  );
+  delete artifact.template.variables.modelSecret;
+  artifact.template.agent.harnessAuth = harnessAuth;
+  const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: artifact,
+  });
+  assert.equal(preset.status, 201, JSON.stringify(preset.body));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByLabel("Preset template").selectOption(preset.data.id);
+  await page.getByLabel("Name", { exact: true }).fill("Managed PAT Preset Agent");
+  await page.getByLabel("Model", { exact: true }).fill("gpt-5.1");
+  await page.getByRole("button", { name: "Use Preset" }).click();
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/namespaces/${namespace.id}/agents`) &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  const response = await createdResponse;
+  assert.equal(response.status(), 201);
+  const created = (await response.json()).data;
+  await page.waitForURL((url) => url.pathname === `/console/agents/${created.id}`);
+  assert.deepEqual(created.harnessAuth, harnessAuth);
+  assert.equal(
+    requests.some(
+      (request) => request.method === "POST" && request.path.endsWith("/access-bindings"),
+    ),
+    false,
+  );
+  assert.equal(secretPostRequests(requests, namespace.id).length, 0);
 });

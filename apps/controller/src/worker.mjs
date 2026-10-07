@@ -6,6 +6,7 @@ import {
   loadOperationalLoggingConfiguration,
   loadStartupConfigurationSnapshot,
 } from "./composition/installation-config.ts";
+import { PresetFileError } from "./composition/installation-presets.ts";
 import { createOccLogger, createWorkerLogEmitter, emitOccLogEvent } from "./logging.ts";
 import { createControllerWorker, workerDatabasePoolOptions } from "./worker.ts";
 import { PostgresMetricsSnapshot } from "@openclaw-enterprise/occ";
@@ -54,7 +55,13 @@ function configuration() {
 }
 
 function workerStartupFailureCode(error) {
+  if (error instanceof PresetFileError) {
+    return "PRESET_FILE_INVALID";
+  }
   const message = error instanceof Error ? error.message : "";
+  if (/stored Installation name breaks the Name rule/.test(message)) {
+    return "INSTALLATION_NAME_INVALID";
+  }
   if (/PostgreSQL connection URL/.test(message)) {
     return "DATABASE_CONFIGURATION_INVALID";
   }

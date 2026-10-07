@@ -148,9 +148,16 @@ Personal [Codex OAuth device login](../guides/deploy/credential-lifecycle.md#use
 is **Experimental**. Bind the returned `source` with `"method": "oauth"`.
 
 For an already issued ChatGPT account credential, use
-`{ "method": "chatgpt_service_account", "serviceAccountId": "sa_123e4567-e89b-42d3-a456-426614174000" }`.
+`{ "method": "codex_pat", "source": { "kind": "service_account", "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000", "id": "sa_123e4567-e89b-42d3-a456-426614174000" } }`.
 This requires dedicated Codex and the account's matching `backendId`. Binding
 an account does not issue its credential or change the model, Harness, or Backend.
+
+**Development upgrade limitation:** migration `0049` rejects retained
+`chatgpt_service_account` bindings in Agent drafts, any historical AgentRevision,
+or provisioning plans. It rolls back without converting or deleting those
+records. Changing the current Agent binding does not clear historical revisions;
+retained legacy state must be cleared before the upgrade can proceed. This is an
+intentional development-state break; in-place conversion is unsupported.
 
 For dedicated Codex with a Credential Gateway, use
 `{ "method": "credential_source", "sourceId": "cs_…" }`; see
@@ -165,10 +172,10 @@ topology checks, and process readiness remain required; no credential-source
 permission is needed. Kubernetes and Docker reject this method. See
 [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
 
-API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. Deployment also
+API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. That includes
+the Secret the Agent already uses: every draft update checks it, including one that replaces it. Deployment also
 requires the Agent service principal's exact Secret `operate`. ChatGPT binding
-requires the actor's exact account `read`, including the current account when
-replacing or clearing a binding. There is no implied account grant for the Agent
+requires the actor's exact account `read`, including the current account on every draft update. There is no implied account grant for the Agent
 principal. Each consumer of a shared source is authorized independently.
 
 Deployment freezes binding references; dispatch rechecks source ownership and
@@ -219,7 +226,7 @@ removed after activation or Agent deletion. Pending inputs have no read/update
 API; correction requires deleting and recreating the Agent.
 
 The optional `workspaceDefaultsId` is a SHA-256 defaults identity. Console sends
-all four rendered `2026.9.7` defaults with this identity. A stale identity rejects
+all four rendered `2026.9.8` defaults with this identity. A stale identity rejects
 creation with `409 RESOURCE_CONFLICT`; runtime mismatch blocks initial setup.
 See the [workspace guide](../guides/topics/workspace-files.md) and
 [setup flow](../flows/workspace-files.md) for recovery and runtime requirements.
@@ -384,6 +391,9 @@ its compatibility limits before planning deployment.
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute
   implementation, or other required dependency is unavailable.
+- `503 RUNTIME_CREDENTIALS_CLUSTER_RBAC`: The cluster denied the API
+  ServiceAccount access to the Agent's runtime credential Secrets or Deployment
+  preflight. An operator must [grant the tenant RoleBindings](../guides/deploy/production-agents.md#grant-tenant-rolebindings).
 
 ## Related
 

@@ -2,9 +2,9 @@
 
 The `keycloak-oidc` lane checks OIDC sign-in against a real, digest-pinned Keycloak
 instead of the `fakeOidc` fixture. It runs as the `Keycloak OIDC` job in the
-[CI workflow](../../.github/workflows/ci.yml) on every pull request and push to
+[CI workflow](../../.github/workflows/ci.yml) in full-mode pull request CI and on pushes to
 `main`, and in the Full Integration `all` run. It is **not** a `CI Required`
-dependency yet. The design is RFC-0059 ([#1117](https://github.com/openclaw/openclaw-enterprise/pull/1117)).
+dependency yet. The proposed design is RFC-0019 ([#1117](https://github.com/openclaw/openclaw-enterprise/pull/1117)).
 
 ## What it runs
 

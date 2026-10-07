@@ -82,6 +82,34 @@ func TestUpRefusesKeycloakWithTheComposeControlPlane(t *testing.T) {
 	}
 }
 
+func TestUpRefusesKeycloakReservedPortConflictsBeforeCreatingState(t *testing.T) {
+	for _, setting := range []string{"OCC_DEVELOPMENT_BROWSER_PORT", "OPENCLAW_DEV_PORT", "OCC_DEVELOPMENT_KUBERNETES_API_PORT"} {
+		t.Run(setting, func(t *testing.T) {
+			for key, value := range keycloakProfileEnv() {
+				t.Setenv(key, value)
+			}
+			t.Setenv("OCC_DEVELOPMENT_SANDBOX_DRIVER", "none")
+			t.Setenv("OCC_DEVELOPMENT_BROWSER_PORT", "8443")
+			t.Setenv("OPENCLAW_DEV_PORT", "3000")
+			t.Setenv("OCC_DEVELOPMENT_KUBERNETES_API_PORT", "6443")
+			t.Setenv(setting, "443")
+			t.Setenv("OCC_DEVELOPMENT_CONTROLLER_IMAGE", "")
+			t.Setenv("OCC_KUBERNETES_RUNTIME_IMAGE", "")
+			t.Setenv("OCC_DEVELOPMENT_REPOSITORY_INPUT_DIRECTORY", "")
+			state := filepath.Join(t.TempDir(), "state")
+			t.Setenv("OCC_DEVELOPMENT_STATE_DIRECTORY", state)
+			t.Setenv("PATH", t.TempDir()) // No engine or provisioning command may run.
+			err := Up(context.Background(), Options{Repository: repositoryRoot(t)})
+			if err == nil || !strings.Contains(err.Error(), "port 443 is reserved for Keycloak") {
+				t.Fatalf("Up error = %v", err)
+			}
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Fatalf("invalid configuration created state: %v", err)
+			}
+		})
+	}
+}
+
 func TestKeycloakPortArgsPublishLoopback443ToTheGatewayNodePort(t *testing.T) {
 	want := []string{"--port", "127.0.0.1:443:30443@loadbalancer"}
 	if got := developmentKeycloakPortArgs(); !slices.Equal(got, want) {

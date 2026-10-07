@@ -599,6 +599,49 @@ test("production Helm values example renders the backendless default chart", too
   assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-chatgpt-egress")));
 });
 
+test(
+  "initialization hooks fit Kubernetes Job names for valid Helm release names",
+  tooling,
+  async (t) => {
+    const names = new Set();
+    for (const release of [
+      "oce",
+      "a".repeat(48),
+      "a".repeat(49),
+      "a".repeat(53),
+      "a".repeat(52) + "b",
+    ]) {
+      await t.test(`release ${release.length} characters, ending ${release.at(-1)}`, async () => {
+        let installedName;
+        for (const isUpgrade of [false, true]) {
+          const objects = await resources((await render({}, { release, isUpgrade })).stdout);
+          const job = objects.find(({ kind }) => kind === "Job");
+          // The real Helm hook must survive admission before migration/bootstrap can run.
+          assert.ok(
+            job.metadata.name.length <= 63,
+            `Job name exceeds 63 characters: ${job.metadata.name}`,
+          );
+          assert.match(job.metadata.name, /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+          assert.ok(job.metadata.name.startsWith(release));
+          assert.equal(job.metadata.labels["app.kubernetes.io/instance"], release);
+          assert.equal(job.spec.template.metadata.labels["app.kubernetes.io/instance"], release);
+          assert.equal(job.metadata.annotations["helm.sh/hook"], "pre-install,pre-upgrade");
+          if (isUpgrade) {
+            assert.equal(job.metadata.name, installedName);
+          } else {
+            installedName = job.metadata.name;
+            assert.ok(!names.has(installedName), "Distinct releases must keep distinct hook names");
+            names.add(installedName);
+          }
+          if (release.length <= 48) {
+            assert.equal(job.metadata.name, `${release}-initialization`);
+          }
+        }
+      });
+    }
+  },
+);
+
 test("production settings coexist in fresh and upgrade chart renders", tooling, async () => {
   const settings = {
     ...agentNativeAdminValues,
@@ -1578,6 +1621,10 @@ test(
   async () => {
     for (const [overrides, message] of [
       [{ "repositoryCredentials.image": "repository-credentials:latest" }, /immutable SHA-256/],
+      [
+        { "repositoryCredentials.image": `repository-credentials@sha256:${"B".repeat(64)}` },
+        /immutable SHA-256/,
+      ],
       [{ "repositoryCredentials.backendId": "" }, /backendId is required/],
       [{ "repositoryCredentials.registryConfigMapName": "" }, /registryConfigMapName is required/],
       [{ "repositoryCredentials.publicCaSecretName": "repository-tls" }, /dedicated Secret/],
@@ -1618,6 +1665,47 @@ test(
     );
   },
 );
+
+test("the chart refuses installation names the bootstrap Job refuses", tooling, async () => {
+  const message =
+    /installation\.name must follow the Name rule: 1 to 200 characters, with no leading or trailing whitespace and no control characters or line or paragraph separators/;
+  for (const name of [
+    "",
+    " ",
+    " name",
+    "name ",
+    "name\nmore",
+    "a".repeat(201),
+    "名".repeat(201),
+    "\uFEFFname",
+    "name\u00A0",
+  ]) {
+    await assert.rejects(
+      render({ "installation.name": name }),
+      ({ code, stderr }) => code !== 0 && message.test(stderr),
+      JSON.stringify(name),
+    );
+  }
+  for (const name of [
+    "openclaw-enterprise",
+    "OpenClaw Local Development",
+    "a".repeat(200),
+    "名".repeat(200),
+    "a\uFEFFb",
+  ]) {
+    const objects = await resources((await render({ "installation.name": name })).stdout);
+    const bootstrap = objects.find(
+      ({ kind, metadata }) => kind === "Job" && metadata.name.endsWith("-initialization"),
+    );
+    assert.ok(
+      bootstrap.spec.template.spec.containers[0].env.some(
+        ({ name: envName, value }) =>
+          envName === "OCC_BOOTSTRAP_INSTALLATION_NAME" && value === name,
+      ),
+      JSON.stringify(name),
+    );
+  }
+});
 
 test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
@@ -1708,6 +1796,12 @@ test(
       pod.containers[0].env.some(
         ({ name, value }) =>
           name === "OCC_BOOTSTRAP_ADMIN_EMAIL" && value === "admin@example.invalid",
+      ),
+    );
+    assert.ok(
+      pod.containers[0].env.some(
+        ({ name, value }) =>
+          name === "OCC_BOOTSTRAP_INSTALLATION_NAME" && value === "openclaw-enterprise",
       ),
     );
     assert.ok(
@@ -1850,6 +1944,14 @@ test(
         assert.ok(!container.volumeMounts.some(({ name }) => name === "internal-admission"));
         assert.deepEqual(container.livenessProbe.httpGet, { path: "/healthz", port: "http" });
         assert.deepEqual(container.readinessProbe.httpGet, { path: "/readyz", port: "http" });
+        // A slow boot must not trip liveness: the startup probe holds liveness off for 2 min.
+        // Readiness waits for the first startup success, so a 1 s period lets the API take
+        // traffic about when it listens instead of at a later probe tick.
+        assert.deepEqual(container.startupProbe, {
+          httpGet: { path: "/healthz", port: "http" },
+          periodSeconds: 1,
+          failureThreshold: 120,
+        });
       } else {
         const readinessMount = container.volumeMounts.find(
           ({ name }) => name === "worker-readiness",
@@ -1954,7 +2056,13 @@ test(
         },
       ],
     });
-    for (const cidr of ["0.0.0.0/0", "198.51.100.0/24", "api.openai.com", "999.1.1.1/32"]) {
+    for (const cidr of [
+      "0.0.0.0/0",
+      "198.51.100.0/24",
+      "api.openai.com",
+      "999.1.1.1/32",
+      "01.2.3.4/32",
+    ]) {
       await assert.rejects(
         render({ "api.modelDiscoveryCidrs[0]": cidr }),
         /api.modelDiscoveryCidrs/,
@@ -2375,13 +2483,16 @@ test(
   },
 );
 
-test("GitHub sign-in egress defaults to HTTPS to any IPv4 address", tooling, async () => {
+test("GitHub sign-in egress defaults to HTTPS except link-local", tooling, async () => {
   const { apiEnv, egress } = await signInObjects(githubLoginValues);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, undefined);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, undefined);
   assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
   assert.deepEqual(egress.spec.egress, [
-    { to: [{ ipBlock: { cidr: "0.0.0.0/0" } }], ports: [{ protocol: "TCP", port: 443 }] },
+    {
+      to: [{ ipBlock: { cidr: "0.0.0.0/0", except: ["169.254.0.0/16"] } }],
+      ports: [{ protocol: "TCP", port: 443 }],
+    },
   ]);
 });
 
@@ -2428,6 +2539,17 @@ test(
         "generic",
         "10.42.0.0/16",
         { value: `x-${"a".repeat(62)}` },
+      ],
+      [
+        // ::ffff:d.d.d.d is an IPv4 address after the API rewrites it, so /32 stays valid.
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "::ffff:192.0.2.1/32",
+          "api.trustedProxy.clientAddressHeader": "X-Client-Address",
+        },
+        "generic",
+        "::ffff:192.0.2.1/32",
+        { value: "x-client-address" },
       ],
     ]) {
       const { selected, apiEnv, egress } = await signInObjects(overrides);
@@ -2481,6 +2603,21 @@ test(
         "GitHub sign-in with a /0 egress entry",
         { ...githubLoginValues, "auth.github.egressCidrs[0]": "0.0.0.0/0" },
         /prefixes 1 through 32/,
+      ],
+      [
+        "GitHub sign-in with an empty-string egress list",
+        { ...githubLoginValues, "auth.github.egressCidrs": "" },
+        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs; leave it unset, or set \[\] in a values file or with --set-json,/,
+      ],
+      [
+        "GitHub sign-in with an empty-string organization allowlist",
+        { ...githubLoginValues, "auth.github.allowedOrgs": "" },
+        /auth\.github\.allowedOrgs must be a list of GitHub organization logins/,
+      ],
+      [
+        "GitHub sign-in with an empty-string team allowlist",
+        { ...githubLoginValues, "auth.github.allowedTeams": "" },
+        /auth\.github\.allowedTeams must be a list of org\/team-slug entries/,
       ],
       [
         "GitHub sign-in sharing the Better Auth Secret",
@@ -2563,6 +2700,36 @@ test(
         /invalid IPv4 address/,
       ],
       [
+        "a trusted proxy with a leading-zero IPv4 address",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "01.2.3.4/32" },
+        /invalid IPv4 address/,
+      ],
+      [
+        "a trusted proxy with a malformed IPv6 address",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "a:/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with more than one IPv6 compression",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": ":::/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with too many IPv6 groups",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "1:2:3:4:5:6:7:8:9/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with a dotted tail before compression",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "1.2.3.4::/96" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "an IPv4-mapped trusted proxy with an IPv6 prefix",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "::ffff:192.0.2.1/128" },
+        /prefix must be 1 through 32/,
+      ],
+      [
         "the internal client-address header",
         { ...trustedProxyValues, "api.trustedProxy.clientAddressHeader": "X-OCC-Client-IP" },
         /cannot be x-occ-client-ip/,
@@ -2640,7 +2807,11 @@ test(
       ["missing database egress list", { "database.cidrs": "" }],
       ["missing Kubernetes API egress list", { "cluster.cidrs": "" }],
       ["broad database egress", { "database.cidrs[0]": "0.0.0.0/0" }],
+      ["database egress that is not an IPv4 host", { "database.cidrs[0]": "999.1.2.3/32" }],
+      ["database egress with a leading-zero octet", { "database.cidrs[0]": "01.2.3.4/32" }],
       ["broad Kubernetes API egress", { "cluster.cidrs[0]": "10.43.0.0/16" }],
+      ["Kubernetes API egress that is not an IPv4 host", { "cluster.cidrs[0]": "256.0.0.1/32" }],
+      ["Kubernetes API egress with a leading-zero octet", { "cluster.cidrs[0]": "01.2.3.4/32" }],
       ["invalid control-plane node selector", { "controlPlane.nodeSelector": "control" }],
       ["false control-plane node selector", { "controlPlane.nodeSelector": false }],
       [
@@ -2658,6 +2829,14 @@ test(
       [
         "unrestricted ChatGPT provider egress",
         { ...chatgptValues, "backend.chatgpt.providerCidr": "0.0.0.0/0" },
+      ],
+      [
+        "ChatGPT provider host that is not an IPv4 address",
+        { ...chatgptValues, "backend.chatgpt.providerCidr": "999.1.2.3/32" },
+      ],
+      [
+        "ChatGPT provider host with a leading-zero octet",
+        { ...chatgptValues, "backend.chatgpt.providerCidr": "01.2.3.4/32" },
       ],
       [
         "ChatGPT Backend without an approved provider host",
@@ -2774,6 +2953,23 @@ test(
         render(override),
         ({ code, stderr }) => code !== 0 && stderr.length > 0,
         description,
+      );
+    }
+    // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other
+    // spellings at pull time. The uppercase algorithm was already refused; uppercase hex
+    // was not.
+    for (const image of [
+      `registry.example/controller@sha256:${"A".repeat(64)}`,
+      `registry.example/controller@SHA256:${"a".repeat(64)}`,
+    ]) {
+      await assert.rejects(
+        render({ "images.controller": image }),
+        ({ code, stderr }) =>
+          code !== 0 &&
+          stderr.includes(
+            "images.controller must be an approved immutable SHA-256 image reference",
+          ),
+        image,
       );
     }
   },
