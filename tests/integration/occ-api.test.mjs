@@ -6031,6 +6031,91 @@ test("deploy audit preserves its authorization decision and rolls back with appe
   assert.equal(fixture.auditSink.events.length, failureAuditCount);
 });
 
+test("deploy grants the deployer exact revision read only when it can hold the binding", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller, "Deployer revision read");
+  const namespace = await createNamespace(controller, "deployer-revision-read");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const agent = await createAgent(controller, namespace.id, "deployer-read-agent");
+  await bindHarnessKey(fixture, namespace.id, agent);
+  const deployerRole = `role_${namespace.id}_deployed_revision_read`;
+  const deployPermissions = [
+    { action: "read", resourceKind: "agent" },
+    { action: "deploy", resourceKind: "agent" },
+    { action: "read", resourceKind: "configuration" },
+    { action: "operate", resourceKind: "secret" },
+  ];
+  const policy = async (kind) =>
+    (await controller.request("GET", `/namespaces/${namespace.id}/iam/${kind}`)).data;
+
+  // An Installation-scoped ServicePrincipal may deploy but cannot be the subject of a
+  // Namespace binding. Its deploy still succeeds, writes no grant and leaves no Role.
+  fixture.state.identities.push({ kind: "service_principal", id: "service-installation-deployer" });
+  fixture.state.roles.push({ id: "role-installation-deployer", permissions: deployPermissions });
+  fixture.state.bindings.push({
+    id: "binding-installation-deployer",
+    subjectKind: "identity",
+    subjectId: "service-installation-deployer",
+    roleId: "role-installation-deployer",
+  });
+  const unbindable = await fixture.controller.deployAgentWithAuthorization(
+    "service-installation-deployer",
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.deepEqual(unbindable.grantedAccessBindings, []);
+  assert.equal(
+    (await policy("roles")).some((role) => role.id === deployerRole),
+    false,
+  );
+
+  // A person with deploy but no revision read gets exact read of the revision she admitted,
+  // named in the deploy audit event.
+  const { principal: member } = await fixture.createAuthPrincipal("deployer-read-member");
+  fixture.state.identities.push(member);
+  fixture.state.roles.push({
+    id: "role-deployer-read-member",
+    namespaceId: namespace.id,
+    permissions: deployPermissions,
+  });
+  fixture.state.bindings.push({
+    id: "binding-deployer-read-member",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: member.id,
+    roleId: "role-deployer-read-member",
+  });
+  const deployed = await injectedRequest(
+    fixture.createApp(member),
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  const grant = {
+    id: `binding_${deployed.data.id}_deployer_read`,
+    subjectKind: "identity",
+    subjectId: member.id,
+    roleId: deployerRole,
+    resourceKind: "agent_revision",
+    resourceId: deployed.data.id,
+  };
+  const event = fixture.auditSink.events.find(
+    (candidate) =>
+      candidate.action === "openclaw.agents.deploy" && candidate.resource.id === deployed.data.id,
+  );
+  assert.deepEqual(event?.details?.grantedAccessBindings, [grant]);
+  assert.deepEqual(
+    (await policy("access-bindings")).filter((binding) => binding.roleId === deployerRole),
+    [{ ...grant, namespaceId: namespace.id }],
+  );
+  assert.deepEqual((await policy("roles")).find((role) => role.id === deployerRole)?.permissions, [
+    { action: "read", resourceKind: "agent_revision" },
+  ]);
+});
+
 test("IAM and audit dependency failures fail closed without orphaned state", async () => {
   const bootstrapFailure = await createInjectedFixture();
   const originalBootstrapAppend = bootstrapFailure.auditSink.append;

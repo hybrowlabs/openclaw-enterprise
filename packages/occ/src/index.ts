@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+  accessBindingAuditRecord,
   accessBindingsTargeting,
   removeNamespacePolicy,
   removedPolicyDetails,
@@ -679,6 +680,8 @@ export interface DeployAgentAuthorization {
 export interface AuthorizedAgentDeployment {
   readonly revision: Readonly<AgentRevision>;
   readonly authorization: Readonly<DeployAgentAuthorization>;
+  /** The deployer's read grant on the admitted revision, when admission wrote one. */
+  readonly grantedAccessBindings: readonly RemovedAccessBinding[];
 }
 
 export interface ActiveAgentRevisionSelection {
@@ -2247,18 +2250,19 @@ export class OpenClawController {
           );
         }
         await this.fenceAgentProvisioning(state, claim);
-        const revision = await this.provisioningContext.run(claim, () =>
-          this.deployAgent(
+        const { revision, grantedAccessBindings } = await this.provisioningContext.run(claim, () =>
+          this.deployAgentWithAuthorization(
             current.actorId,
             { namespaceId: current.namespaceId, agentId: current.agentId! },
             resolveHarness,
           ),
         );
-        await this.commitProvisioningCheckpoint(state, claim, {
-          completedPhase: "handoff",
-          status: "succeeded",
-          revisionId: revision.id,
-        });
+        await this.commitProvisioningCheckpoint(
+          state,
+          claim,
+          { completedPhase: "handoff", status: "succeeded", revisionId: revision.id },
+          grantedAccessBindings.length === 0 ? undefined : { grantedAccessBindings },
+        );
         return revision;
       });
       return Object.freeze({ outcome: "succeeded" as const, revisionId: revision.id });
@@ -5843,6 +5847,11 @@ export class OpenClawController {
       if (running === undefined) {
         throw new ResourceStateConflictError("The Agent lifecycle changed during deployment.");
       }
+      const grantedAccessBindings = await this.grantDeployerRevisionRead(
+        state,
+        principalId,
+        revision,
+      );
       await this.record(state, {
         kind: "agent_revision",
         action: "reconcile",
@@ -5850,7 +5859,7 @@ export class OpenClawController {
         resourceId: revision.id,
         actorId: principalId,
       });
-      const result = Object.freeze({ revision, authorization });
+      const result = Object.freeze({ revision, authorization, grantedAccessBindings });
       if (auditEvent) {
         await state.audit.append(auditEvent(result));
       }
@@ -7103,6 +7112,7 @@ export class OpenClawController {
     state: PlatformUnitOfWork,
     claim: ClaimedWork,
     checkpoint: AgentProvisioningCheckpoint,
+    auditDetails?: Readonly<Record<string, unknown>>,
   ): Promise<Readonly<AgentProvisioningRecord>> {
     const record = await state.provisioning.checkpoint(claim, checkpoint);
     await state.audit.append({
@@ -7124,6 +7134,7 @@ export class OpenClawController {
         workId: record.workId,
         phase: record.completedPhase,
         ...(record.revisionId === undefined ? {} : { revisionId: record.revisionId }),
+        ...auditDetails,
       },
     });
     return record;
@@ -7536,6 +7547,97 @@ export class OpenClawController {
       secrets.push(secret);
     }
     return Object.freeze(secrets);
+  }
+
+  /**
+   * Grants the deployer exact `agent_revision:read` on the revision this deploy admitted, in
+   * the admission transaction (RFC-0019). Deploy already required read on the Configuration
+   * the revision snapshots and on its Secret and Harness sources, and its `202` returns the
+   * snapshot, so the grant discloses nothing new. Agent deletion and Namespace teardown remove
+   * it with the revision. Returns the binding for the deploy audit event, or nothing when the
+   * deployer can already read the revision, the selected IAM Driver keeps policy outside
+   * platform State, or the deployer cannot hold a Namespace binding (an Installation-scoped
+   * ServicePrincipal).
+   */
+  private async grantDeployerRevisionRead(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    revision: Readonly<AgentRevision>,
+  ): Promise<readonly RemovedAccessBinding[]> {
+    const target = {
+      kind: "agent_revision",
+      id: revision.id,
+      namespaceId: revision.namespaceId,
+    } as const;
+    const driver = this.selectedDriver("iam");
+    if (
+      driver.namespacePolicyTransaction !== "platform-unit-of-work" ||
+      driver.createNamespaceRole === undefined ||
+      driver.createNamespaceAccessBinding === undefined ||
+      driver.deleteNamespaceRole === undefined ||
+      (await this.canRead(principalId, target))
+    ) {
+      return Object.freeze([]);
+    }
+    const namespaceId = revision.namespaceId;
+    // One Role per Namespace, like the provisioning Secret grant; Roles are immutable, so a
+    // deterministic ID with exactly this permission is safe to reuse.
+    const roleId = `role_${namespaceId}_deployed_revision_read`;
+    const existingRole = await state.iamPolicy.getRole(namespaceId, roleId);
+    if (
+      existingRole !== undefined &&
+      (existingRole.permissions.length !== 1 ||
+        existingRole.permissions[0]?.action !== "read" ||
+        existingRole.permissions[0]?.resourceKind !== "agent_revision")
+    ) {
+      throw new ResourceConflictError(
+        "The deployed-revision read Role does not have the exact revision read permission.",
+      );
+    }
+    if (existingRole === undefined) {
+      await this.iamPolicyOperation(() =>
+        driver.createNamespaceRole!(
+          { policy: state.iamPolicy },
+          {
+            id: roleId,
+            namespaceId,
+            name: "Deployed revision read",
+            permissions: [{ action: "read", resourceKind: "agent_revision" }],
+          },
+        ),
+      );
+    }
+    let binding: Readonly<AccessBinding>;
+    try {
+      binding = await this.iamPolicyOperation(() =>
+        driver.createNamespaceAccessBinding!(
+          { policy: state.iamPolicy },
+          {
+            id: `binding_${revision.id}_deployer_read`,
+            namespaceId,
+            subjectKind: "identity",
+            subjectId: principalId,
+            roleId,
+            resourceKind: "agent_revision",
+            resourceId: revision.id,
+          },
+        ),
+      );
+    } catch (error) {
+      // Only an Installation-scoped ServicePrincipal can deploy here without being a valid
+      // Namespace binding subject; it keeps the access it has, as before this grant existed.
+      if (error instanceof IAMPolicyValidationError && error.path === "/subjectId") {
+        if (existingRole === undefined) {
+          // Leave no unreferenced Role behind for a grant that was not written.
+          await this.iamPolicyOperation(() =>
+            driver.deleteNamespaceRole!({ policy: state.iamPolicy }, namespaceId, roleId),
+          );
+        }
+        return Object.freeze([]);
+      }
+      throw error;
+    }
+    return Object.freeze([accessBindingAuditRecord(binding)]);
   }
 
   private async ensureAgentSecretOperateGrants(

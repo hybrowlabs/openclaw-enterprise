@@ -375,7 +375,9 @@ export function createAgentHandlers(options: AgentHandlerOptions) {
           (admitted) =>
             mutationEvent(
               { kind: "agent_revision", id: admitted.revision.id, namespaceId },
-              undefined,
+              admitted.grantedAccessBindings.length === 0
+                ? undefined
+                : { grantedAccessBindings: admitted.grantedAccessBindings },
               admitted.authorization,
             ),
         );
