@@ -47,6 +47,9 @@ A `CredentialSourceType` declares:
   optional description. `config` fields are nonsecret strings; `secrets` fields
   are supplied as OCC Secret references.
 - `rotation`: `none`, `external`, or `gateway`.
+- `deviceAuthorization`: optional `{ harnessId }` declaring device login for this
+  source type. The login path requires one matching type with no required user
+  config or Secret inputs.
 - `harnessAuth`: optional `{ modelProvider, loginMode }`. Only a type with this
   entry can authenticate a Harness. Login modes are `api_key` and, for dedicated
   Codex, `chatgptAuthTokens`.
@@ -76,22 +79,32 @@ the existing native model probe must still succeed before app-server starts.
 
 The external credential service owns refresh and the gateway owns injection
 for inference, hosted app/MCP, and authenticated account/configuration requests.
-Metadata is projected at provisioning; live metadata updates and reconnect
-delivery are not implemented here. Native user-identity checks that depend on
+Metadata is projected at provisioning; account metadata changes require a new
+revision. A fresh device login creates a new source for explicit replacement. Native user-identity checks that depend on
 access-token claims are not established with an opaque placeholder.
 
-This mode does not change the Experimental `oauth` binding, whose native Codex
-runtime retains refresh ownership on
-[private persistent storage](kubernetes-compute/codex-oauth-storage.md).
+This replaces the legacy runtime-owned OAuth binding. No persistent credential
+bundle or native-refresh fallback is supported. See
+[Experimental OAuth storage](kubernetes-compute/codex-oauth-storage.md).
 
 ### Optional additions
 
-The contract has no optional methods. `SecretDriver.withValue` is the
-[Secret Driver](secret.md#interface) method OCC uses to obtain the values it
-passes to `registerSource` and `updateSource`. Withdrawal also needs two optional
-methods on its collaborators: Compute's `withdrawCredentialSource`, which the
-worker calls, and the Sandbox Driver's `harnessResource`, which returns the exact
-Sandbox a revision runs in without side effects.
+A device-login source requires `startDeviceAuthorization(context)` and
+`pollDeviceAuthorization(context, privateState)`. Start returns device instructions,
+expiry and an opaque handle. Poll returns `pending` or `ready`; `ready` means the
+external service durably owns the connection. Neither returns provider tokens to
+OCC. Calls operate on the exact registered source and must not recreate a removed
+source. OCC serializes polling with Secret compare-and-swap and does not replay
+an uncertain exchange.
+
+`withSourceToken(context, use)` supplies a warm `CredentialSourceToken` only for
+an authorized configuration callback: access token and optional trusted account
+ID/FedRAMP classification. It must not initiate refresh or return the refresh
+credential. The callback rechecks authorization before provider I/O; source
+withdrawal and token readiness remain the external service's responsibility.
+
+`SecretDriver.withValue` supplies static registration inputs. Withdrawal also
+uses Compute's `withdrawCredentialSource` and the Sandbox's `harnessResource`.
 
 ## IAM
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-10-07
-last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
+last_updated_session: authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f
 ---
 
 # Service Account Driver Credential Delivery Flow
@@ -118,7 +118,7 @@ Agent `backendId` is nullable. Create omission saves `null`; PATCH omission
 preserves the current value; explicit `null` clears it; and a nonnull ID must
 name a configured Backend. Saving or changing the draft Agent reference makes
 no upstream call. The Agent selects the issued account through
-`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`.
+`harnessAuth: { method: "codex_pat", source: { kind: "service_account", namespaceId, id: serviceAccountId } }`.
 
 `deployAgent` authorizes the Agent, Configuration, and associated account, then
 validates `access_token` ownership with
@@ -195,6 +195,8 @@ Refresh, rotation, and automated reconciliation remain deferred.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 17:35: Select managed accounts through a typed `codex_pat` source while preserving account permissions, Backend ownership, and native token login. (authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-07 16:52: Use the shared Codex token login without a runtime workspace override; retain control-plane ownership checks. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)
 

@@ -16,7 +16,7 @@ authenticates before guarded activation. With `{ "method": "runtime" }`,
 the operator supplies credentials on an SSH host instead; OCC freezes only the
 method and checks gateway readiness without model authentication.
 
-Codex OAuth device login and its one-time credential handoff are **Experimental**;
+Codex OAuth device login through an external credential source is **Experimental**;
 see the [launch limits](../reference/drivers/kubernetes-compute/codex-oauth-storage.md#oauth-launch-limits).
 
 ## Entry Points
@@ -34,10 +34,9 @@ see the [launch limits](../reference/drivers/kubernetes-compute/codex-oauth-stor
 ```mermaid
 graph TD
   A["Store key or separately issue account credential"] --> B["Save Agent harnessAuth reference"]
-  DA["Complete device login in OCE"] --> B
-  G -->|dedicated OAuth| OA["Claim source and copy bundle to private disk"]
-  OA --> OB["Consume source and remove seed before native start"]
-  OB --> J
+  DA["Gateway completes device login<br/>External implementation required"] -.-> B
+  G -->|external ChatGPT| OA["Sandbox supplies placeholder<br/>and account metadata"]
+  OA --> J
   R["Operator provisions protected host env"] --> B
   D -->|runtime| S["SSH starts embedded gateway using host env"]
   S --> T["Check gateway readiness; model auth remains unverified"]
@@ -67,19 +66,18 @@ graph TD
 `packages/occ/src/index.ts:OpenClawController.startAgentDeviceAuthorization`,
 `pollAgentDeviceAuthorization`, `cancelAgentDeviceAuthorization`
 
-Device login persists actor, exact Namespace/optional Agent scope, provider state,
-and phase in the selected Secret backend; PostgreSQL stores only the Secret
-reference. The selected Compute Driver owns the provider protocol in
-`apps/controller/src/drivers/compute/device-auth.ts:startHarnessDeviceAuthorization`
-and `pollHarnessDeviceAuthorization`. A successful exchange stores a complete
-native bundle; HTTP responses expose only the reference and device instructions.
+Device login creates a credential source and asks its Credential Gateway to start
+and poll authorization. The Secret-backed session records actor, exact Namespace
+and optional Agent scope, source identity, and an opaque Gateway handle. Tokens
+remain with the external service. Ready responses return a credential-source
+reference; Console saves a `credential_source` binding and grants the Agent
+principal exact source `operate`.
 
-Each poll verifies current scope and Secret authority; Secret compare-and-swap
-claims one exchange, so concurrent polls cannot consume the same code, and a late
-response cannot overwrite cancellation. Unknown exchange outcomes require a new
-login. Local discard never logs out or revokes upstream. Before handoff,
-a ready session can supply plugin discovery through the authorized catalog path;
-the Plugin Driver extracts native access and account metadata.
+Secret compare-and-swap permits one in-flight poll and fences cancellation. An
+uncertain exchange requires reconnect. Closing or expiring a session removes its
+handle without revoking the source. Plugin discovery uses the Gateway's warm
+`withSourceToken` callback with current source authorization. It continues through
+the saved source after the login session closes.
 
 Before saving, Console can call the selected Compute Driver's
 `apps/controller/src/drivers/compute/model-discovery.ts:discoverHarnessModels`
@@ -94,8 +92,10 @@ does not prove a model call will succeed.
 `authorizeHarnessAuthSource`
 
 Create and PATCH follow the [`harnessAuth` field semantics](../reference/agents.md#harness-authentication).
-API-key, `codex_pat`, and OAuth sources use stable OCC Secret references; the method remains distinct even for the same Secret. The actor
-needs exact Secret `operate`; a ChatGPT binding needs exact account `read`.
+API keys and imported `codex_pat` tokens use stable OCC Secret references and
+require exact Secret `operate`. Managed PATs use ServiceAccount references and
+require exact account `read`. OAuth uses a CredentialSource reference owned by
+the selected Credential Gateway and requires exact source `operate`.
 Namespace locks serialize source reference changes against deletion. Missing or
 foreign sources fail closed. Binding never selects a different model, Backend,
 Harness, or execution mode and cannot issue an account credential.
@@ -115,9 +115,9 @@ reference and Driver identity. For a ChatGPT account, it verifies the issued
 access-token reference and private Backend, member Driver, and workspace
 ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
 selected Compute validates the combination: SSH accepts only embedded OpenClaw
-with `runtime`; Kubernetes requires managed authentication and admits OAuth only
-for Compute-owned dedicated Codex without a Sandbox Driver, so an unsupported
-binding fails before predecessors stop.
+with `runtime`; Kubernetes requires managed authentication. External ChatGPT sources require
+dedicated Codex and the paired Sandbox and Credential Gateway; unsupported
+bindings fail before predecessors stop.
 
 Host credential changes can affect a runtime revision after restart without
 redeployment; see the
@@ -186,8 +186,8 @@ are deleted before the probe and app-server start. Missing or conflicting
 inputs, failed login, or a failed bounded native turn against the primary model
 (under the restricted [probe policy](../reference/harness-execution.md#harness-authentication))
 prevent app-server startup and readiness. API-key and service-account login
-state remains in the bounded ephemeral home; OAuth reuses the persistent bundle
-(step 6).
+state remains in the bounded ephemeral home. External-token startup writes
+placeholder-only auth state instead of running native login (step 6).
 
 The dedicated wrapper retains `APP_SERVER_TOKEN` for local plugin
 authentication (with plugin status enabled, deriving it from the Agent revision
@@ -225,35 +225,23 @@ unchanged until preparation: deploy each consumer, verify a real turn, then
 revoke the previous key upstream. Revision history cannot restore historical
 Secret values.
 
-### 6. Transfer OAuth refresh ownership once
+### 6. Deliver externally managed OAuth authentication
 
-`apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareOAuthCredentials`,
-`removeOAuthBootstrap`
+`apps/controller/src/drivers/compute/kubernetes/index.ts:credentialSourceEnvironment`,
+`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`
 
-After dedicated predecessors stop, Compute claims the source Secret with an atomic
-resource-version update, binding its immutable UID to the Agent and PVC UID.
-Single-cluster source and seed share the tenant namespace; two-cluster sources
-use the control client. Seed Secret,
-bootstrap Deployment, and private PVC use the resolved execution-plane namespace
-and client.
-A bootstrap-only Deployment runs
-`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT`
-and writes native auth and a generation receipt to disk. Repeating
-that generation preserves the bundle. A new selected source
-can replace it after predecessor termination: the script empties `codex-home`,
-writes through exclusive temporaries, and re-reads both files before readiness.
-A later non-OAuth revision's private-state init container removes `codex-home`.
+The admitted source attachment supplies a placeholder and trusted account metadata.
+Compute sends these only to the Harness. Its launcher writes ephemeral
+`chatgptAuthTokens` auth state without a refresh token and runs the normal native
+probe before app-server startup. The external service retains refresh ownership;
+the paired Sandbox injects a warm access token into authorized outgoing requests.
+There is no native-refresh or persistent-bundle fallback. Restarts reconstruct the
+same receiving state from a current attachment; sessions and workspace keep their
+independent persistence.
 
-Compute observes bootstrap readiness, replaces the original Secret value with a
-consumed marker, removes the seed Secret, and waits for bootstrap Pods to
-terminate; only then can Codex start. Its OAuth startup branch opens existing
-auth, validates the receipt, and runs the ordinary model probe. Native refresh
-writes the same persistent file. Later revisions retain the source and reopen disk;
-a missing file or changed PVC fails with reconnect required.
-
-Token brokerage remains separate work in progress. OCE never refreshes
-a consumed bundle or restores its seed, and the source seal prevents ordinary
-Secret updates from resetting custody.
+The [credential source lifecycle](credential-source-lifecycle.md) owns source
+registration, authorization, withdrawal and deletion. This integration requires
+an external OAuth Driver and service; the bundled catalog offers API keys only.
 
 ## Debugging and Verification
 
@@ -294,6 +282,8 @@ Secret updates from resetting custody.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 17:36: Replace runtime-owned OAuth custody with source-owned device login and warm discovery; unify PAT sources. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-07 16:53: Normalize managed and supplied service-account credentials to token-only Codex login while preserving control-plane workspace ownership. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)
 - 2026-10-03 15:38: Merge current credential flow while preserving shared-namespace source placement. (01a0fe72-58b2-7cc3-b770-7310f5401deb - 94364ae9)

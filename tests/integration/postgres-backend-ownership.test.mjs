@@ -280,7 +280,10 @@ test(
       name: `dedicated-${randomUUID()}`,
       configurationId: dedicatedConfiguration.id,
       backendId,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       executionMode: "dedicated",
     });
     const admitted = await controller.deployAgent(
@@ -290,8 +293,8 @@ test(
     );
     assert.equal(admitted.backendId, backendId);
     assert.deepEqual(admitted.harnessAuth, {
-      method: "chatgpt_service_account",
-      serviceAccountId: account.id,
+      method: "codex_pat",
+      source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
       credential: account.credential,
       backendBinding: binding,
     });
@@ -326,7 +329,10 @@ test(
       name: `embedded-${randomUUID()}`,
       configurationId: embeddedConfiguration.id,
       backendId,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       executionMode: "embedded",
     });
     await expectBackendConflict(
@@ -486,7 +492,14 @@ test(
         name: `${scenario.label}-${randomUUID()}`,
         configurationId: configuration.id,
         backendId: scenario.agentBackendId,
-        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: brokenAccount.id },
+        harnessAuth: {
+          method: "codex_pat",
+          source: {
+            kind: "service_account",
+            namespaceId: brokenAccount.namespaceId,
+            id: brokenAccount.id,
+          },
+        },
         executionMode: "dedicated",
       });
       await expectBackendConflict(
@@ -529,7 +542,14 @@ test(
           name: crossNamespaceAgentName,
           configurationId: targetConfiguration.id,
           backendId,
-          harnessAuth: { method: "chatgpt_service_account", serviceAccountId: sourceAccount.id },
+          harnessAuth: {
+            method: "codex_pat",
+            source: {
+              kind: "service_account",
+              namespaceId: targetNamespace.id,
+              id: sourceAccount.id,
+            },
+          },
           executionMode: "dedicated",
         }),
       (error) =>

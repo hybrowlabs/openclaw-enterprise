@@ -220,6 +220,11 @@ export interface SecretReference extends ResourceRef {
   readonly namespaceId: string;
 }
 
+export interface ServiceAccountReference extends ResourceRef {
+  readonly kind: "service_account";
+  readonly namespaceId: string;
+}
+
 export interface SecretIdentity {
   readonly id: string;
   readonly namespaceId: string;
@@ -294,6 +299,8 @@ export interface CredentialSourceFieldSpec {
 
 /** One entry in a Credential Gateway implementation's catalog. */
 export interface CredentialSourceType {
+  /** Device login initializes this source in the selected Credential Gateway. */
+  readonly deviceAuthorization?: { readonly harnessId: string };
   readonly type: string;
   readonly config: readonly CredentialSourceFieldSpec[];
   readonly secrets: readonly CredentialSourceFieldSpec[];
@@ -363,8 +370,7 @@ export interface CredentialWithdrawalStatus extends CredentialWithdrawal {
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
-  | { readonly method: "oauth"; readonly source: SecretReference }
-  | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
+  | { readonly method: "codex_pat"; readonly source: ServiceAccountReference }
   | { readonly method: "credential_source"; readonly sourceId: string }
   | { readonly method: "runtime" };
 
@@ -382,13 +388,8 @@ export type HarnessAuthSnapshot =
       readonly secretDriverId: string;
     }
   | {
-      readonly method: "oauth";
-      readonly source: SecretReference;
-      readonly secretDriverId: string;
-    }
-  | {
-      readonly method: "chatgpt_service_account";
-      readonly serviceAccountId: string;
+      readonly method: "codex_pat";
+      readonly source: ServiceAccountReference;
       readonly credential: ServiceAccountCredential & { readonly kind: "access_token" };
       readonly backendBinding: {
         readonly backendId: string;
@@ -407,13 +408,13 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" | "oauth" }> & {
+  | (Extract<HarnessAuthSnapshot, { source: SecretReference }> & {
       readonly backendRef: SecretBackendRef;
     })
   | (Extract<HarnessAuthSnapshot, { method: "credential_source" }> & {
       readonly source: Readonly<CredentialSource>;
     })
-  | Extract<HarnessAuthSnapshot, { method: "chatgpt_service_account" | "runtime" }>;
+  | Extract<HarnessAuthSnapshot, { source: ServiceAccountReference } | { method: "runtime" }>;
 
 export interface ComputeRevisionContext {
   readonly workspaceSetup?: Readonly<WorkspaceSetup>;
@@ -1269,6 +1270,20 @@ export interface CredentialAttachmentStatus {
 /** Holds credential sources and applies them outside the Agent workload. */
 export interface CredentialGatewayDriver extends Driver {
   readonly capability: "credential_gateway";
+  /** The Gateway owns the provider exchange and tokens; OCC retains only an opaque handle. */
+  startDeviceAuthorization?(
+    context: CredentialSourceContext,
+  ): Promise<CredentialSourceDeviceAuthorization>;
+  /** Ready means the Gateway durably owns the connection; never return tokens to OCC. */
+  pollDeviceAuthorization?(
+    context: CredentialSourceContext,
+    privateState: string,
+  ): Promise<CredentialSourceDeviceAuthorizationResult>;
+  /** Warm lookup only: the token service owns refresh. Tokens exist only during the callback. */
+  withSourceToken?<T>(
+    context: CredentialSourceContext,
+    use: (token: CredentialSourceToken) => Promise<T>,
+  ): Promise<T>;
   listSourceTypes(context: CredentialGatewayContext): Promise<readonly CredentialSourceType[]>;
   registerSource(
     context: CredentialSourceContext,
@@ -1342,10 +1357,18 @@ export interface PluginDriverContext {
   readonly signal: AbortSignal;
 }
 
+/** Short-lived source authentication for an authorized control-plane operation. */
+export interface CredentialSourceToken {
+  readonly accessToken: string;
+  /** Trusted provider identity, never browser-supplied metadata. */
+  readonly accountId?: string;
+  readonly isFedramp?: boolean;
+}
+
 export interface PluginDiscoveryAuthentication {
   readonly accessToken?: string;
-  /** Server-owned native OAuth bundle; never accepted from public discovery requests. */
-  readonly credential?: { readonly kind: "oauth"; readonly value: string };
+  readonly accountId?: string;
+  readonly isFedramp?: boolean;
 }
 
 export interface PluginDriver extends Driver {
@@ -1725,17 +1748,16 @@ export interface ComputePreflightResult {
   readonly warnings: readonly ComputePreflightWarning[];
 }
 
-export interface HarnessDeviceAuthorization {
+export interface CredentialSourceDeviceAuthorization {
   readonly verificationUrl: string;
   readonly userCode: string;
   readonly expiresAt: string;
   readonly intervalSeconds: number;
-  /** Provider authorization material; retain only in server-side Secret storage. */
+  /** Opaque Gateway login handle; never an access or refresh token. */
   readonly privateState: string;
 }
 
-export type HarnessDeviceAuthorizationResult =
-  { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string };
+export type CredentialSourceDeviceAuthorizationResult = { readonly status: "pending" | "ready" };
 
 export interface ComputeDriver extends Driver {
   readonly supportsWorkspaceSetup?: true;
@@ -1755,15 +1777,6 @@ export interface ComputeDriver extends Driver {
    */
   requiresStoppedPredecessors?(revision: AgentRevision): boolean;
   getRuntimeImages?(revision: AgentRevision): Promise<readonly RuntimeImage[]>;
-  /** Provider protocol and native credential formatting belong to the selected Compute Driver. */
-  startHarnessDeviceAuthorization?(
-    harnessId: string,
-    signal?: AbortSignal,
-  ): Promise<HarnessDeviceAuthorization>;
-  pollHarnessDeviceAuthorization?(
-    privateState: string,
-    signal?: AbortSignal,
-  ): Promise<HarnessDeviceAuthorizationResult>;
   /** Read-only native model discovery; supplied credentials must never be persisted. */
   discoverHarnessModels?(input: {
     readonly authMethod: "api_key" | "codex_pat";
@@ -1867,7 +1880,12 @@ export * from "./api/common.ts";
 export * from "./api/resources.ts";
 export * from "./api/routes.ts";
 
-export { normalizeHarnessAuthBinding, harnessAuthBindingFromSnapshot } from "./harness-auth.ts";
+export {
+  normalizeHarnessAuthBinding,
+  harnessAuthBindingFromSnapshot,
+  isSecretHarnessAuth,
+  isServiceAccountHarnessAuth,
+} from "./harness-auth.ts";
 
 export type { Preset, PresetTemplate, PresetLaunchSettings, PresetVariable } from "./presets.ts";
 export { normalizePresetTemplate } from "./presets.ts";

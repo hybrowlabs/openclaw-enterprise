@@ -9,7 +9,7 @@ const candidateVersion =
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start with default Preset")];
-const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
+const oauthForm = [...form, { selector: "#agent-auth-method", value: "credential_source" }];
 const startOAuthLogin = [...oauthForm, click("Sign in with OAuth")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
@@ -2120,7 +2120,7 @@ export const scenarios = {
     pluginCapabilities,
     actions: oauthForm,
     description:
-      "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
+      "Experimental login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
   },
   createOAuthPending: {
     group: "Pages/Create Agent",
@@ -2142,7 +2142,7 @@ export const scenarios = {
       "The fixture completes login after one poll. Configure plugins uses the server-owned login reference. No access or refresh token appears in this preview.",
     steps: [
       "Wait for ChatGPT login ready, then open Configure plugins and add Calendar.",
-      "Choose a model and create the Agent. Deployment is simulated; the runtime token handoff is not proved here.",
+      "Choose a model and create the Agent. Deployment is simulated; credential-service delivery is not proved here.",
     ],
   },
   createOAuthDenied: {
@@ -2183,16 +2183,15 @@ export const scenarios = {
   },
   pluginsOAuthRevision: {
     group: "Pages/Agent detail",
-    name: "Separate ChatGPT login for plugin editing (Experimental)",
+    name: "Saved ChatGPT login for plugin editing (Experimental)",
     path: `${draft}&tab=plugins`,
     deployed: true,
     auth: "oauth",
     agentPlugins: JSON.parse(pluginSelections),
     pluginCapabilities,
     pluginDiscovery,
-    actions: [click("Sign in with OAuth")],
     description:
-      "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
+      "Plugin browsing uses the Agent's saved credential source without another login. Saving plugin selections never replaces authentication.",
   },
   authOAuthReconnect: {
     group: "Components/Credentials",
@@ -3712,8 +3711,28 @@ export const scenarios = {
     name: "ChatGPT service account",
     path: `${draft}&tab=credentials`,
     auth: "service",
-    description: "Select an existing issued service account.",
+    description:
+      "Select an issued service account, or switch to an imported Service Accounts token Secret. Both use the same PAT login method.",
     gap: "Service-account issuance is outside the console.",
+  },
+  authServiceEmpty: {
+    group: "Components/Credentials",
+    name: "No issued service accounts",
+    path: `${draft}&tab=credentials`,
+    auth: null,
+    serviceAccountsEmpty: true,
+    actions: [{ selector: "#harness-auth-method", value: "service_account" }],
+    description:
+      "An empty issued-account list cannot be saved. Choose another authentication source.",
+  },
+  authServiceDenied: {
+    group: "Components/Credentials",
+    name: "Issued service accounts unavailable",
+    path: `${draft}&tab=credentials`,
+    auth: "service",
+    rules: [{ suffix: "/service-accounts", method: "GET", status: 403 }],
+    description:
+      "A failed list request preserves the saved account and explains that accounts are unavailable.",
   },
   nativeAdmin: {
     group: "Components/Native admin",

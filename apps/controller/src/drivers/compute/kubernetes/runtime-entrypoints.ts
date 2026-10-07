@@ -2832,86 +2832,6 @@ if (followsPeerStatus) {
 }
 `;
 
-export const CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT = String.raw`
-try {
-const fs = require("node:fs");
-const path = require("node:path");
-const directory = process.env.CODEX_HOME;
-const expected = {
-  sourceUid: process.env.OCE_CODEX_OAUTH_SOURCE_UID,
-  volumeUid: process.env.OCE_CODEX_OAUTH_VOLUME_UID,
-};
-if (!directory || !expected.sourceUid || !expected.volumeUid) {
-  throw new Error("OAuth bootstrap identity is missing.");
-}
-const authPath = path.join(directory, "auth.json");
-const receiptPath = path.join(directory, ".oce-oauth.json");
-const validAuth = (auth) => auth?.auth_mode === "chatgpt" &&
-  [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
-    .every((value) => typeof value === "string" && value.trim().length > 0);
-const readRegularJson = (target) =>
-  fs.lstatSync(target, { throwIfNoEntry: false })?.isFile()
-    ? JSON.parse(fs.readFileSync(target, "utf8"))
-    : undefined;
-if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory() === false) {
-  fs.rmSync(directory, { force: true });
-}
-fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-let receipt;
-try {
-  receipt = readRegularJson(receiptPath);
-} catch {
-  // An unreadable receipt proves nothing; seeding below replaces the directory contents.
-}
-if (receipt?.sourceUid === expected.sourceUid) {
-  if (receipt.volumeUid !== expected.volumeUid || !validAuth(readRegularJson(authPath))) {
-    throw new Error("OAuth runtime credentials require reconnect.");
-  }
-} else {
-  const auth = JSON.parse(fs.readFileSync(process.env.OCE_CODEX_OAUTH_SEED_PATH, "utf8"));
-  if (!validAuth(auth)) {
-    throw new Error("OAuth bootstrap credentials are invalid.");
-  }
-  // A new source starts from an empty Codex home: no previous login, sessions, or links.
-  // rmSync removes symbolic links themselves and never follows them.
-  for (const entry of fs.readdirSync(directory)) {
-    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
-  }
-  const writeJson = (target, value) => {
-    const temporary = target + ".bootstrap";
-    // Exclusive creation fails on any existing path, including a planted symbolic link.
-    const descriptor = fs.openSync(temporary, "wx", 0o600);
-    try {
-      fs.writeFileSync(descriptor, JSON.stringify(value));
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-    fs.renameSync(temporary, target);
-  };
-  writeJson(authPath, auth);
-  writeJson(receiptPath, expected);
-  const descriptor = fs.openSync(directory, "r");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-  // Readiness reports only a verified final state.
-  const written = readRegularJson(receiptPath);
-  if (
-    !validAuth(readRegularJson(authPath)) ||
-    written?.sourceUid !== expected.sourceUid ||
-    written.volumeUid !== expected.volumeUid
-  ) {
-    throw new Error("OAuth bootstrap could not verify private credentials.");
-  }
-}
-} catch {
-  throw new Error("OAuth bootstrap could not initialize private credentials.");
-}
-`;
-
 // Codex 0.158 app-server hard-codes FmtSpan::FULL on its stderr layer, so each
 // instrumented call prints span "new" and "close" records, and each poll of an
 // instrumented future a span "enter" and "exit" record, at the span's level:
@@ -3060,10 +2980,6 @@ if (loginMode === "api_key") {
   if (!nonempty(accessToken) || apiKey !== undefined) {
     throw new Error("Codex service account token authentication configuration is invalid.");
   }
-} else if (loginMode === "oauth") {
-  if (apiKey !== undefined || accessToken !== undefined) {
-    throw new Error("Codex OAuth authentication configuration is invalid.");
-  }
 } else if (loginMode === "chatgptAuthTokens") {
   if (!nonempty(accessToken) || !nonempty(externalAccount) || apiKey !== undefined) {
     throw new Error("Codex external authentication configuration is invalid.");
@@ -3145,21 +3061,6 @@ if (loginMode === "chatgptAuthTokens") {
     login = { status: 1 };
   } finally {
     if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
-  }
-} else if (loginMode === "oauth") {
-  try {
-    const fs = require("node:fs");
-    const receipt = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/.oce-oauth.json", "utf8"));
-    const auth = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/auth.json", "utf8"));
-    const valid = receipt.sourceUid === process.env.OCE_CODEX_OAUTH_SOURCE_UID &&
-      receipt.volumeUid === process.env.OCE_CODEX_OAUTH_VOLUME_UID &&
-      typeof receipt.sourceUid === "string" && typeof receipt.volumeUid === "string" &&
-      auth.auth_mode === "chatgpt" &&
-      [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
-        .every((value) => typeof value === "string" && value.trim().length > 0);
-    login = { status: valid ? 0 : 1 };
-  } catch {
-    login = { status: 1 };
   }
 } else {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -3386,7 +3287,7 @@ const child = spawn(
     "shell_environment_policy.experimental_use_profile=false",
     "-c",
     "shell_environment_policy.set.PATH=" + JSON.stringify(process.env.PATH ?? ""),
-    ...(["oauth", "chatgptAuthTokens"].includes(loginMode) ? ["-c", "cli_auth_credentials_store=file"] : []),
+    ...(loginMode === "chatgptAuthTokens" ? ["-c", "cli_auth_credentials_store=file"] : []),
     "app-server",
     "--listen",
     "ws://0.0.0.0:" + process.env.APP_SERVER_PORT,

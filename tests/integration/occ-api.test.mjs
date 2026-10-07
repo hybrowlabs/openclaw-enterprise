@@ -3533,11 +3533,14 @@ test("native ServiceAccounts keep private credential references and cannot admit
     body: {
       name: "service-account-agent",
       configurationId: configuration.id,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
     },
   });
   assert.equal(agentResult.status, 201);
-  assert.equal(agentResult.data.harnessAuth.serviceAccountId, account.id);
+  assert.equal(agentResult.data.harnessAuth.source.id, account.id);
   const agent = agentResult.data;
   const deploymentPath = `/namespaces/${namespace.id}/agents/${agent.id}/deploy`;
 
@@ -3767,7 +3770,10 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "cross-namespace-agent",
         configurationId: configurationB.id,
-        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountA.id },
+        harnessAuth: {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: namespaceB.id, id: accountA.id },
+        },
       },
     },
   );
@@ -3853,7 +3859,10 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "denied-account-association",
         configurationId: configurationA.id,
-        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountB.id },
+        harnessAuth: {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: accountB.namespaceId, id: accountB.id },
+        },
       },
     },
   );
@@ -3874,19 +3883,25 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
       body: {
         name: "allowed-account-association",
         configurationId: configurationA.id,
-        harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountA.id },
+        harnessAuth: {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: accountA.namespaceId, id: accountA.id },
+        },
       },
     },
   );
   assert.equal(allowedAssociation.status, 201);
-  assert.equal(allowedAssociation.data.harnessAuth.serviceAccountId, accountA.id);
+  assert.equal(allowedAssociation.data.harnessAuth.source.id, accountA.id);
   const associatedAgentPath = `/namespaces/${namespaceA.id}/agents/${allowedAssociation.data.id}`;
 
   // Replacing A with B requires exact read on the new account, not merely authority over A.
   const deniedNewAccount = await injectedRequest(readerApp, "PATCH", associatedAgentPath, {
     body: {
       configurationId: configurationA.id,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: accountB.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: accountB.namespaceId, id: accountB.id },
+      },
     },
   });
   assert.equal(deniedNewAccount.status, 403);
@@ -3895,7 +3910,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     "GET",
     associatedAgentPath,
   );
-  assert.equal(unchangedAfterNewAccountDenial.data.harnessAuth.serviceAccountId, accountA.id);
+  assert.equal(unchangedAfterNewAccountDenial.data.harnessAuth.source.id, accountA.id);
 
   const deniedCreation = await injectedRequest(
     readerApp,
@@ -3927,7 +3942,14 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
           harnessAuth:
             serviceAccountId === null
               ? null
-              : { method: "chatgpt_service_account", serviceAccountId },
+              : {
+                  method: "codex_pat",
+                  source: {
+                    kind: "service_account",
+                    namespaceId: namespaceA.id,
+                    id: serviceAccountId,
+                  },
+                },
         },
       },
     );
@@ -3945,7 +3967,7 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     });
 
     const unchanged = await injectedRequest(replacementOnlyApp, "GET", associatedAgentPath);
-    assert.equal(unchanged.data.harnessAuth.serviceAccountId, accountA.id);
+    assert.equal(unchanged.data.harnessAuth.source.id, accountA.id);
   }
 });
 
@@ -4669,7 +4691,6 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
       [
         { path: "/harnessAuth/method", code: "INVALID_VALUE" },
         { path: "/harnessAuth/source", code: "REQUIRED" },
-        { path: "/harnessAuth/serviceAccountId", code: "REQUIRED" },
         { path: "/harnessAuth/sourceId", code: "REQUIRED" },
         { path: "/harnessAuth", code: "INVALID_VALUE" },
         { path: "/harnessAuth", code: "INVALID_TYPE" },

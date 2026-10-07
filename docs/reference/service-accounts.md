@@ -72,7 +72,7 @@ with `409`; rotation and reconciliation are not implemented. Calling issuance
 without a selected ServiceAccount Driver fails with `503 DEPENDENCY_UNAVAILABLE`.
 
 An Agent binds the same-Namespace account through
-`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`.
+`harnessAuth: { method: "codex_pat", source: { kind: "service_account", namespaceId, id: serviceAccountId } }`.
 Association and deployment require `read` on the exact account. Updating or
 detaching an associated account requires current-account `read`; replacement
 requires `read` on both accounts. An Agent can reference an account before it
@@ -113,7 +113,7 @@ Codex Pod:
 | ------------------ | -------------------------- | ---------------------------------- |
 | `token`            | `CODEX_ACCESS_TOKEN`       | One upstream account access token. |
 
-Both this binding and a directly supplied `codex_pat` use
+Both managed-account and Secret sources use `codex_pat` with
 `CODEX_LOGIN_MODE=codex_pat`. Codex authenticates through
 `codex -c cli_auth_credentials_store=file login --with-access-token`, derives
 account identity from the token, and saves login state only in its bounded

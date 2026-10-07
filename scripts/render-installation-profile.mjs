@@ -1417,7 +1417,7 @@ function buildRendered(profile, parsed, diagnostics) {
       );
     } else {
       diagnostics.prerequisites.push(
-        "ChatGPT service-account app connections configured outside OCE before Agents use chatgpt_service_account auth.",
+        "ChatGPT service-account app connections configured outside OCE before Agents select a managed ServiceAccount as their codex_pat source.",
       );
       diagnostics.warnings.push(
         "Managed ChatGPT service-account issuance is wired but remains unverified until a live admin credential flow is qualified.",

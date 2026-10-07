@@ -255,8 +255,8 @@ Remote channel menus remain deferred to [#241](https://github.com/openclaw/openc
 
 Only Harness mounts dedicated workspace, generated-image and Codex rollout
 storage. The rollouts let the Gateway resume its bound Codex thread after
-stop/start or Pod replacement; the rest of `CODEX_HOME` stays Pod-local unless
-OAuth keeps it on the claim. Codex's remote-media reader transfers reply
+stop/start or Pod replacement; the rest of `CODEX_HOME` stays Pod-local. External OAuth authentication
+uses an ephemeral placeholder and metadata, with refresh owned by the token service. Codex's remote-media reader transfers reply
 artifacts before cleanup. Embedded storage is unchanged.
 `KubernetesComputeDriver.verifyPersistentVolumeClaim` rejects RWX claims without
 mutating them. The worker stops predecessors and suppresses their maintenance
@@ -346,6 +346,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 17:36: Remove the persistent OAuth exception from Harness credential storage. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-06 18:40: Say that OCC's model check refuses malformed provider rows before the Codex Gateway shape check, without naming the path. (dogfood-r38)
 

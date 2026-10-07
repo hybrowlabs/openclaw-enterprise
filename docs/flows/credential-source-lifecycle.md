@@ -121,6 +121,24 @@ event. If that transaction fails or the process exits, the record stays
 copy. If a concurrent DELETE already removed the record, OCC removes the copy
 again and returns `409`.
 
+### Device authorization and configuration
+
+`packages/occ/src/index.ts:startAgentDeviceAuthorization`,
+`pollAgentDeviceAuthorization`, `withPluginDiscoveryCredential`
+
+A catalog type may declare `deviceAuthorization.harnessId`. OCC creates that
+source through normal registration, then invokes the selected Gateway's device
+login methods. Tokens remain in the service; a private Secret stores only the
+opaque login handle and exact source/actor scope. Ready returns the source
+reference for the Agent binding. Failed and abandoned sources remain visible for
+explicit cleanup; closing a login does not revoke a source.
+
+For plugin configuration, OCC authorizes exact source use and invokes
+`withSourceToken`. The callback rechecks current authority before passing the warm
+access token and trusted account identity to the Plugin Driver. It never asks
+Codex to refresh. Saved-Agent discovery additionally rechecks the saved source
+and Agent principal's grant, so it works independently of the login-session lifetime.
+
 ### 4. Bind the source to an Agent
 
 `packages/occ/src/index.ts:authorizeHarnessAuthSource`
@@ -135,8 +153,7 @@ database rejects deleting a source an Agent draft still uses.
 
 `packages/occ/src/index.ts:deployAgent`, `packages/occ/src/index.ts:admitHarnessAuth`
 
-`assertCredentialGatewayDelivery` rejects `api_key`, `codex_pat`, and
-`chatgpt_service_account` with `409` while a gateway is selected. For
+`assertCredentialGatewayDelivery` rejects `api_key` and `codex_pat` with `409` while a gateway is selected. For
 `credential_source`, `admitHarnessAuth` authorizes the Agent service principal's
 `operate`, requires a `ready` source, and reads its catalog type, which must
 declare `harnessAuth`. The frozen snapshot is `{ method, sourceId,
@@ -177,8 +194,8 @@ preserved verbatim for the paired Sandbox's injector.
 
 This receiving path depends on a Driver and external service providing the
 OAuth source, refresh, and injection. The bundled OpenShell catalog still
-provides only API-key authentication. It does not convert existing Experimental
-OAuth bindings or transfer their persistent refresh credentials.
+provides only API-key authentication. Legacy runtime-owned OAuth bindings are
+unsupported; no stored refresh bundle is imported from an Agent.
 
 ### 7. Delete the source
 
@@ -308,6 +325,8 @@ than re-attach the source.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 17:36: Trace source-owned device authorization and warm configuration discovery; remove legacy OAuth fallback. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-07 00:22: Documented the external ChatGPT placeholder and account-metadata handoff into native Codex in the accompanying change. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - ca0df6314ddddabc2f039de791f35c2e5de7ec43)
 - 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)

@@ -163,6 +163,9 @@ function classifyReceipts(receipts, manifest) {
       if (receipts.length === 47) {
         return "preAdministratorCredentialSourceGrants";
       }
+      if (receipts.length === 49) {
+        return "preCanonicalHarnessAuth";
+      }
       if (receipts.length === 48) {
         return "preExternalChatgptAuth";
       }
@@ -248,6 +251,9 @@ function classifyReceipts(receipts, manifest) {
   }
   if (receipts.length === 47) {
     return "preAdministratorCredentialSourceGrants";
+  }
+  if (receipts.length === 49) {
+    return "preCanonicalHarnessAuth";
   }
   if (receipts.length === 48) {
     return "preExternalChatgptAuth";

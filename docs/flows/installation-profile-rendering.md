@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
-updated: 2026-09-29
-last_updated_session: r2-fix-7
+updated: 2026-10-07
+last_updated_session: authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f
 ---
 
 # Installation Profile Rendering Flow
@@ -83,8 +83,8 @@ profile rejects Codex-only inputs.
 The input schema has no field for the hosted discovery and `codex_pat` runtime
 token because Installation startup configuration does not consume it.
 `preflight.json` tells the operator to add that credential later as a
-same-Namespace Secret or through the Console. Managed `chatgpt_service_account`
-provisioning is optional and renders only when `codex.managedServiceAccounts` is
+same-Namespace Secret or through the Console. Managed ServiceAccount
+provisioning for `codex_pat` is optional and renders only when `codex.managedServiceAccounts` is
 supplied.
 
 Preflight applies the downstream contracts for IPv4 CIDRs, native-admin DNS
@@ -193,6 +193,8 @@ activation, and repository registry creation need separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 17:35: Name managed ServiceAccounts as a `codex_pat` credential source in rendered preflight guidance. (authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-07: Refuse a public-suffix shared cookie domain in preflight.
 - 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.

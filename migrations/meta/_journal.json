@@ -344,6 +344,13 @@
       "when": 1787000000049,
       "tag": "0049_external_chatgpt_harness_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1787000000050,
+      "tag": "0050_canonical_harness_auth",
+      "breakpoints": true
     }
   ]
 }

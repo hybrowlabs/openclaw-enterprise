@@ -91,22 +91,20 @@ revoked authority, or a missing required Driver fail closed; see
 The Agent's [harnessAuth binding](agents.md#harness-authentication) is the sole
 model-auth selector. Kubernetes supports these combinations:
 
-| Binding                        | Topology                           | Credential consumer                                                                                               |
-| ------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `api_key` with an OCC Secret   | Embedded OpenClaw                  | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
-| `api_key` with an OCC Secret   | Dedicated OpenClaw                 | Only the native Harness receives `OPENAI_API_KEY`.                                                                |
-| `api_key` with an OCC Secret   | Dedicated Codex                    | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
-| `codex_pat` with an OCC Secret | Dedicated Codex                    | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
-| `oauth` (**Experimental**)     | Dedicated Codex, no Sandbox Driver | Codex owns its credential bundle on [private storage](drivers/kubernetes-compute/codex-oauth-storage.md).         |
-| `chatgpt_service_account`      | Dedicated Codex                    | Only Codex receives `CODEX_ACCESS_TOKEN`, using the same native token login as `codex_pat`.                       |
-| `credential_source`            | Dedicated Harness                  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
+| Binding                                     | Topology           | Credential consumer                                                                                               |
+| ------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `api_key` with an OCC Secret                | Embedded OpenClaw  | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
+| `api_key` with an OCC Secret                | Dedicated OpenClaw | Only the native Harness receives `OPENAI_API_KEY`.                                                                |
+| `api_key` with an OCC Secret                | Dedicated Codex    | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
+| `codex_pat` with a Secret or ServiceAccount | Dedicated Codex    | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
+| `credential_source`                         | Dedicated Harness  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
 
 A selected Sandbox uses only Compute's
 [rendered login mode and Secret projections](drivers/sandbox.md#provisioning-inputs).
 
-The `codex_pat` and `chatgpt_service_account` bindings both render
-`CODEX_LOGIN_MODE=codex_pat`. Their OCE source ownership and authorization remain
-distinct; native Codex derives account identity from the access token.
+The `codex_pat` binding accepts a Secret or managed ServiceAccount source and
+renders `CODEX_LOGIN_MODE=codex_pat` for both. Source ownership and authorization
+remain distinct; native Codex derives account identity from the access token.
 
 A [`credential_source`](credential-sources.md) binding requires a selected
 Credential Gateway, the paired OpenShell Sandbox, a dedicated Codex or native
@@ -128,7 +126,9 @@ Kubernetes deployment rejects `runtime` with `409`.
 Before its app server starts, Codex rejects missing or conflicting runtime
 inputs and, after login, requires a bounded native model turn to succeed; local
 credential storage alone does not prove provider acceptance.
-API-key and PAT login state stays in its bounded ephemeral home. Gateway
+API-key, PAT and external-token login state stays in the bounded ephemeral home.
+External `chatgptAuthTokens` state contains no refresh token; the token service
+owns refresh. There is no persistent OAuth credential handoff or native-refresh fallback. Gateway
 transport and workload identity credentials remain separate; a dedicated
 gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime

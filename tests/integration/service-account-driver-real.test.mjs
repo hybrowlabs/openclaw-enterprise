@@ -562,13 +562,24 @@ test(
       configurationId: configuration.data.id,
       backendId: "openai",
       executionMode: "dedicated",
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.data.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: {
+          kind: "service_account",
+          namespaceId: account.data.namespaceId,
+          id: account.data.id,
+        },
+      },
     });
     assertControllerStatus(agent, 201);
     assert.equal(agent.data.backendId, "openai");
     assert.deepEqual(agent.data.harnessAuth, {
-      method: "chatgpt_service_account",
-      serviceAccountId: account.data.id,
+      method: "codex_pat",
+      source: {
+        kind: "service_account",
+        namespaceId: account.data.namespaceId,
+        id: account.data.id,
+      },
     });
 
     // Gateway transport remains operator-owned and separate from the account's model credential.

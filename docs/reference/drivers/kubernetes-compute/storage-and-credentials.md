@@ -98,13 +98,12 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 Each dedicated Agent receives a `40Gi` `ReadWriteOnce` filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                        | Harness mount                        |
-| ---------------------------------------------- | ------------------------------------ |
-| `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
-| `workspace`                                    | `/home/node/workspace`               |
-| `generated-images`                             | `/home/node/.codex/generated_images` |
-| `codex-sessions`                               | `/home/node/.codex/sessions`         |
-| `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
+| Subpath                                      | Harness mount                        |
+| -------------------------------------------- | ------------------------------------ |
+| `workspace`                                  | `/home/node/workspace`               |
+| `generated-images`                           | `/home/node/.codex/generated_images` |
+| `codex-sessions`                             | `/home/node/.codex/sessions`         |
+| `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
 The node Secret's setup code expires ten minutes after preparation mints it. A

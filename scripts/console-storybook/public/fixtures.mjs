@@ -32,7 +32,12 @@ function slackChannels(scenario) {
 function configurationValues(scenario) {
   const values = {
     gateway: { mode: "local" },
-    agents: { defaults: { model: "codex/gpt-4.1" } },
+    agents: {
+      defaults: {
+        model: "codex/gpt-4.1",
+        models: { "codex/gpt-4.1": { agentRuntime: { id: "codex" } } },
+      },
+    },
     channels: {},
   };
   if (scenario.gatewayPassword) {
@@ -161,6 +166,7 @@ export function installFixture(scenario, evidence) {
     {
       id: "sa_demo",
       name: "Research service",
+      credential: { kind: "access_token" },
       backendId: "chatgpt-demo",
       status: "active",
       createdAt,
@@ -198,11 +204,11 @@ export function installFixture(scenario, evidence) {
       : scenario.auth === "runtime"
         ? { method: "runtime" }
         : scenario.auth === "service"
-          ? { method: "chatgpt_service_account", serviceAccountId: "sa_demo" }
+          ? { method: "codex_pat", source: { kind: "service_account", namespaceId, id: "sa_demo" } }
           : scenario.auth === "codex_pat"
             ? { method: "codex_pat", source: secretRef("sec_demo_service_account") }
             : scenario.auth === "oauth"
-              ? { method: "oauth", source: secretRef("sec_demo_oauth_deployed") }
+              ? { method: "credential_source", sourceId: "crs_demo_oauth" }
               : auth;
   let selectedRevisionId = null;
   if (scenario.candidateDeploymentStatus) {
@@ -569,20 +575,16 @@ export function installFixture(scenario, evidence) {
       if (deviceLogin) {
         const [, id, poll] = deviceLogin;
         if (!id && method === "POST") {
-          const source = secretRef(nextId("sec"));
+          const session = secretRef(nextId("sec"));
           const login = {
-            source,
+            session,
             status: "pending",
             verificationUrl: "https://auth.openai.com/codex/device",
             userCode: "DEMO-1234",
             expiresAt: new Date(Date.now() + (scenario.oauthExpired ? -1 : 600_000)).toISOString(),
             intervalSeconds: 1,
           };
-          deviceLogins.set(source.id, login);
-          secrets.set(
-            source.id,
-            secretMetadata(source.id, "Codex OAuth login (Experimental, simulated)"),
-          );
+          deviceLogins.set(session.id, login);
           return response(login);
         }
         const login = deviceLogins.get(id);
@@ -592,6 +594,7 @@ export function installFixture(scenario, evidence) {
         if (poll && method === "POST") {
           if (!scenario.oauthPending) {
             login.status = "ready";
+            login.source ??= { kind: "credential_source", namespaceId, id: nextId("crs") };
           }
           return response(login);
         }
@@ -602,7 +605,7 @@ export function installFixture(scenario, evidence) {
         }
       }
       if (resource === "service-accounts" && method === "GET") {
-        return response(accounts);
+        return response(scenario.serviceAccountsEmpty ? [] : accounts);
       }
       if (
         (resource === "agents/repository-options" ||

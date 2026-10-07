@@ -245,6 +245,14 @@ OpenShell tools.
 
 ### External ChatGPT authentication boundary
 
+`tests/integration/device-authorization-api.test.mjs` exercises real Fastify,
+OCC, IAM and credential-source storage through login, Agent creation/revision
+admission and plugin discovery. The external Gateway contract and provider HTTP
+are simulated. It verifies session fencing, source grants, warm discovery after
+session closure/expiry, and rejection of credential leakage. The Console OAuth
+browser case exercises those routes through the actual controls; Storybook is
+separate simulated UI evidence. Neither proves external token refresh or injection.
+
 `tests/conformance/kubernetes-compute.test.mjs` exercises the real Compute
 preparation path with Driver transport fixtures. It checks source matching,
 Harness-only placeholder/metadata delivery, and refusal before provisioning on

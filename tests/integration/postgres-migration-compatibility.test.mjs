@@ -1626,6 +1626,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
       [48, "preExternalChatgptAuth"],
+      [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1778,7 +1779,7 @@ test(
 );
 
 test(
-  "Canonical migration upgrades the exact Provider receipt lineage without rewriting fingerprints",
+  "Provider migration preserves fingerprints and rejects retired Harness authentication",
   requiresHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
@@ -1791,11 +1792,10 @@ test(
       ok: true,
       history: "providerCompleted",
     });
-    assert.deepEqual(await runHistoryMigration(db), {
-      ok: true,
-      history: "providerCompleted",
-    });
-    await assertCompletedHistory(db, receipts);
+    // Preserve the historical terminology migration proof through its supported auth shape.
+    // The final canonical-auth migration must then refuse these retired credentials atomically.
+    await installCanonicalPrefix(db, 49);
+    assert.deepEqual((await historyReceipts(db.migrator)).slice(0, receipts.length), receipts);
     assert.deepEqual(
       (
         await db.app.query(
@@ -1904,12 +1904,14 @@ test(
     );
     assert.deepEqual(await runHistoryMigration(db, "production", true), {
       ok: true,
-      history: "completed",
+      history: "preCanonicalHarnessAuth",
     });
+    const beforeRefusal = await historySnapshot(db);
     assert.deepEqual(await runHistoryMigration(db, "production"), {
-      ok: true,
-      history: "completed",
+      ok: false,
+      code: "MIGRATION_FAILED",
     });
+    assert.deepEqual(await historySnapshot(db), beforeRefusal);
   },
 );
 
@@ -1936,6 +1938,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
       [48, "preExternalChatgptAuth"],
+      [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -2013,6 +2016,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
       [48, "preExternalChatgptAuth"],
+      [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

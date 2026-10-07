@@ -39,9 +39,13 @@ export const backendFixtures = Object.freeze([
 function computeDriver({
   repositoryCredentials = false,
   discoverHarnessModels = async () => [],
+  sandboxDriver,
+  credentialGatewayDriver,
 } = {}) {
   const driver = createTestKubernetesComputeDriver("console-compute", {
     repositoryCredentials,
+    sandboxDriver,
+    credentialGatewayDriver,
   });
 
   return Object.assign(driver, {
@@ -55,6 +59,10 @@ function computeDriver({
     },
     async deleteNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    // The same fixture placement is shared by source management and the Sandbox.
+    async resolveSandboxNamespace(namespace) {
+      return { ...namespace, name: `console-${namespace.id}` };
     },
     async prepareRevision(revision) {
       return {
@@ -160,16 +168,33 @@ export async function createConsoleAppFixture(t, options = {}) {
           const namespaces = await view.namespaces.listNamespaces();
           const roles = [];
           const bindings = [];
+          const identities = [];
           for (const namespace of namespaces) {
+            // Browser-created Agents must participate in the same live IAM evaluation
+            // as their browser-created credential grants.
+            for (const agent of await view.agents.listAgents(namespace.id)) {
+              identities.push({
+                id: agent.servicePrincipalId,
+                kind: "service_principal",
+                namespaceId: agent.namespaceId,
+                agentId: agent.id,
+              });
+            }
             roles.push(...(await view.iamPolicy.listRoles(namespace.id)));
             bindings.push(...(await view.iamPolicy.listAccessBindings(namespace.id)));
           }
-          return { roles, bindings };
+          return { roles, bindings, identities };
         };
         const unit = policyUnit.getStore();
         const managed = await (unit ? readPolicy(unit) : platformState.read(readPolicy));
         return {
           ...policy,
+          identities: [
+            ...policy.identities,
+            ...managed.identities.filter(
+              (identity) => !policy.identities.some((existing) => existing.id === identity.id),
+            ),
+          ],
           roles: [...policy.roles, ...managed.roles],
           bindings: [...policy.bindings, ...managed.bindings],
         };
@@ -210,6 +235,8 @@ export async function createConsoleAppFixture(t, options = {}) {
       computeDriver({
         repositoryCredentials: options.repositoryCredentials === true,
         discoverHarnessModels: options.discoverHarnessModels,
+        sandboxDriver: options.sandboxDriver,
+        credentialGatewayDriver: options.credentialGatewayDriver,
       }),
     configurationDriver:
       configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),

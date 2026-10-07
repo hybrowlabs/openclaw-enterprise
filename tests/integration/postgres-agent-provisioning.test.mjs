@@ -2240,7 +2240,10 @@ test(
         plan: {
           name: body.name,
           configuration: body.configuration,
-          harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+          harnessAuth: {
+            method: "codex_pat",
+            source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+          },
           executionMode: body.executionMode,
           drivers: {
             compute: fixture.computeDriver.id,
