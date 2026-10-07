@@ -8,18 +8,17 @@ status_note: "Retroactive record. The design is already implemented on main (PRs
 # Proposal: First-deploy activation for dedicated Agents on Kubernetes
 
 - **ID:** RFC-0019
-- **Owner:** Kubernetes Compute Driver and runtime entrypoints. Review: Compute and security owners.
 - **Created:** 2026-10-01
-- **Last updated:** 2026-10-03
-- **RFC PR:** this PR (retroactive record, not an approval)
+- **Last updated:** 2026-10-07
+- **RFC PR:** [#855] (retroactive record, not an approval)
 - **Related:** superseded plan [Workspace enrollment without a Harness restart](../plans/40-workspace-enrollment-without-harness-restart.md);
   [Harness RWO workspace plan](../plans/38-harness-rwo-workspace-plan.md); current contracts in
   [harness execution](../../docs/reference/harness-execution.md),
   [Kubernetes storage](../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md) and
   [networking](../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md);
   open, unlanded proposal on activation evidence: [#458](https://github.com/openclaw/openclaw-enterprise/pull/458).
-- **Source baseline:** `main` at `04d01d02e`. Symbols are in the driver
-  [`kubernetes/index.ts`][index] or the wrappers [`runtime-entrypoints.ts`][entry] unless named.
+- **Source baseline:** `main` at `bf67a4317` (first written against `04d01d02e`). Symbols are in
+  the driver [`kubernetes/index.ts`][index] or the wrappers [`runtime-entrypoints.ts`][entry] unless named.
 
 <a id="problem-and-decision"></a>
 
@@ -31,7 +30,9 @@ scheduling, the RWO attach, a recursive chown, login, the model probe and plugin
 on an install that sets the status-proxy source CIDRs, each workload starts once. Both
 Deployments are created in the first pass, the node setup code and node id reach the running
 Pods through optional volumes, and the Gateway hot-applies the node instead of being replaced.
-This record also covers related predecessor, fail-fast and resource changes.
+This record also covers related predecessor, fail-fast and resource changes. The decision
+belongs to the Kubernetes Compute Driver and its runtime entrypoints; the Compute and security
+owners review it.
 
 ## Motivation
 
@@ -55,7 +56,8 @@ Dogfooding measured 99.6-123.7 s for a Codex first deploy that still replaced it
 ## Non-goals
 
 Embedded Agents keep their single-Pod path, apart from the predecessor repairs below. Native
-OpenClaw workers and SandboxDriver Harnesses keep the env-based setup code and replace-to-attach.
+OpenClaw workers keep the env-based setup code and replace-to-attach. Since [#1400] Compute
+provisions a SandboxDriver Harness only after the Gateway is Ready and its setup Secret exists.
 Redeploy serving continuity (D67) is not solved; see the open questions.
 
 <a id="design"></a>
@@ -75,11 +77,13 @@ Redeploy serving continuity (D67) is not solved; see the open questions.
   ConfigMap `gateway-<agent>-workspace-node` holding only `{revisionId, deviceId}`. The wrapper
   polls it every second and hot-applies it, changing only `plugins.*` / `cloudWorkers.*`. It
   reports `workspaceNodeId` only after OpenClaw lists `file-transfer` as active in a newer plugin
-  registry. Activation waits up to 20 s (`WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS`) and fails at
-  once on a reported cause such as `RELOAD_NOT_CONFIRMED`. Since [#877] the 20 s is a budget per
-  revision and node across activation attempts (`workspaceNodeBindingAckSpentMs`); once spent,
-  each attempt reads the status once. Since [#857] the wrapper asks the running Gateway for
-  `plugins.list` over its Gateway SDK connection, not a CLI subprocess.
+  registry. Activation waits up to 20 s (`WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS`); a reported
+  cause such as `RELOAD_NOT_CONFIRMED` fails the attempt at once, to be retried. Since [#1128]
+  `GATEWAY_UNAUTHORIZED` fails the revision permanently as `AGENT_GATEWAY_UNAUTHORIZED`. Since
+  [#877] the 20 s is a budget per revision and node across activation attempts
+  (`workspaceNodeBindingAckSpentMs`); once spent, each attempt reads the status once. Since
+  [#857] the wrapper asks the running Gateway for `plugins.list` over its Gateway SDK
+  connection, not a CLI subprocess.
 - **S4b, Gateway alongside the Harness ([#652]).** With no Gateway yet and a Deployment-backed
   Codex Harness (`initialDedicatedCodexGateway`), pass 1 reconciles the revision-scoped agent
   Service, the Agent network policies, the Harness route, the Gateway, then the Harness. The wrapper's
@@ -146,31 +150,39 @@ _Implemented flow: first dedicated Codex deploy with status-proxy CIDRs set._
   the 900 s deadline. Starved CPU already failed at once; [#871] extends this to every code the
   entrypoints hold until restart (`HELD_RUNTIME_FAILURE_CODES` in `worker.ts`): a probe timeout or
   failure, a failed Codex login and a missing probe or invalid approver configuration each fail
-  with their own code. Unknown codes still wait for the deadline. [#838]: the OpenClaw probe first sends one
-  empty `POST` to the default OpenAI or Anthropic base URL, at the configured API's path since
-  [#932] (`/responses`, `/chat/completions` or `/v1/messages`; `credentialRejectedUpfront`). Only
-  a 401 fails; anything else runs the full probe. A non-default base URL or unsupported API,
+  at once (the last two share `RUNTIME_STARTUP_FAILED`); since [#1070] a failed probe also
+  reports a classified cause. Unknown codes still wait for the deadline. [#838]: the OpenClaw
+  probe first sends one empty `POST` to the default OpenAI or Anthropic base URL, at the
+  configured API's path since [#932] (`/responses`, `/chat/completions` or `/v1/messages`;
+  `credentialRejectedUpfront`). Only a 401 fails; anything else runs the full probe. A non-default base URL or unsupported API,
   extra provider or request options, model headers, a model with its own API or base URL, other
   providers and Anthropic setup tokens skip it.
 - **Resources.** [#683]: Gateway, Harness and namespace-default CPU limits are `"4"` in the profile
   renderer and production example, requests stay `100m`, and an unquoted quantity names its
   field. [#841]: Gateways request `1280Mi` in the renderer, production example and dev launcher,
   from measured use of 0.8-1.2 GiB (dedicated) and up to 1.64 GiB (embedded). [#866] raised the
-  Gateway memory limit from `2Gi` to `3Gi` in all three.
+  Gateway memory limit from `2Gi` to `3Gi` in all three. Since [#1168] Gateways request
+  `1792Mi` and Harnesses `768Mi`, and [#1178] raised the Harness limit to `6Gi`.
 
 ## Measured effect
 
-| Measurement                                | Before              | After                        |
+| Measurement                                | Before              | After (main revision)        |
 | ------------------------------------------ | ------------------- | ---------------------------- |
 | Starts per first Codex deploy (ratchet)    | 5, 3 pending passes | 2, 1 pending pass            |
-| Codex first deploy, launcher install (D68) | 99.6-123.7 s        | 28.4 s (#791, fresh install) |
-| Paired → binding written (D25)             | 2.2-5.2 s           | under 1 s (#816)             |
-| Pending passes after Ready (D25)           | 3-4                 | 0-1                          |
-| Codex first deploy, round 5 (load 70-77)   | –                   | 30.8 s, 33.3 s               |
-| Wrong model key reported (#838, D26)       | 29-53 s             | 489 ms                       |
+| Codex first deploy, launcher install (D68) | 99.6-123.7 s        | 28.4 s (`81207521e`)         |
+| Paired → binding written (D25)             | 2.2-5.2 s           | 0-1 s (`f22a584e6`)          |
+| Pending passes after Ready (D25)           | 3-4                 | 0-1 (`f22a584e6`)            |
+| Codex first deploy, round 5 (load 70-77)   | –                   | 30.8 s, 33.3 s (`cc06ec34b`) |
+| Wrong model key reported (#838, D26)       | 29-53 s             | 489 ms (`cc06ec34b`)         |
 
-D25 before-runs ran at host load 44-154 and after-runs at 6-7, so only the cadence rows compare
-like for like. #580, #652 and #668 were not measured separately. #821's never-pairs path is
+#791 and #816 ran no live after-measurement: #791 left its first-deploy retest pending, and
+#816 published projections (about 0.4 s and 0-1 pending passes). The after column comes from
+later dogfood runs on the local k3d install at the `main` revision shown: a fresh launcher
+install (load 12-42; Harness 1 + Gateway 1), an in-place controller upgrade with three Codex
+first deploys (load 6-7; stage times at 1 s resolution), and a later controller upgrade (load
+70-77). These runs are recorded in dogfood notes, not in a PR. D25 before-runs ran at
+`769c8cd88` and host load 44-154, so only the cadence rows compare like for like; they match
+#816's projection. #580, #652 and #668 were not measured separately. #821's never-pairs path is
 tested on a fake clock only.
 
 ## Security and trust
@@ -195,8 +207,8 @@ tested on a fake clock only.
 
 - **Setup code over the private status port.** Held in reserve in case kubelet refresh was slow;
   #612 measured 1.3-1.7 s, so it was not built.
-- **Overlap model probes with process start (S2, #595).** Dropped: no Codex saving (0.1-0.3 s
-  slower) and embedded probe timeouts at 500m.
+- **Overlap model probes with process start (S2, #595).** Dropped (#595 closed unmerged): no
+  Codex saving (0.1-0.3 s slower) and embedded probe timeouts at 500m.
 - **Reuse probe results across restarts (S3).** Dropped: it would store a credential-derived
   digest on a PVC that Codex can read.
 - **Release the worker between pairing and activation (#821).** Rejected: it re-adds a pending
@@ -269,12 +281,18 @@ tested on a fake clock only.
 [#821]: https://github.com/openclaw/openclaw-enterprise/pull/821
 [#838]: https://github.com/openclaw/openclaw-enterprise/pull/838
 [#841]: https://github.com/openclaw/openclaw-enterprise/pull/841
+[#855]: https://github.com/openclaw/openclaw-enterprise/pull/855
 [#857]: https://github.com/openclaw/openclaw-enterprise/pull/857
 [#866]: https://github.com/openclaw/openclaw-enterprise/pull/866
 [#871]: https://github.com/openclaw/openclaw-enterprise/pull/871
 [#877]: https://github.com/openclaw/openclaw-enterprise/pull/877
 [#892]: https://github.com/openclaw/openclaw-enterprise/pull/892
 [#932]: https://github.com/openclaw/openclaw-enterprise/pull/932
+[#1070]: https://github.com/openclaw/openclaw-enterprise/pull/1070
+[#1128]: https://github.com/openclaw/openclaw-enterprise/pull/1128
+[#1168]: https://github.com/openclaw/openclaw-enterprise/pull/1168
+[#1178]: https://github.com/openclaw/openclaw-enterprise/pull/1178
+[#1400]: https://github.com/openclaw/openclaw-enterprise/pull/1400
 
 - Volume refresh measurement: [#612](https://github.com/openclaw/openclaw-enterprise/pull/612).
 - Enrollment client: [`node-enrollment-client.ts`](../../apps/controller/src/gateway/node-enrollment-client.ts);
