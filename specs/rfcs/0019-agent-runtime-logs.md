@@ -2,23 +2,23 @@
 status: Proposed
 implementation_status: Implemented
 author: freeqaz
-status_note: "Retroactive record. The design below is implemented on main (PRs #696 through #811, with follow-ups through #969) and awaits human review. No acceptance decision has been recorded; Proposed is the closest allowed status."
+status_note: "Retroactive record. The design below is implemented on main (PRs #696 through #811, with follow-ups through #1371) and awaits human review. No acceptance decision has been recorded; Proposed is the closest allowed status."
 ---
 
 # Proposal: Agent runtime status and log reads
 
 - **ID:** RFC-0019
-- **Owner:** needs a human owner; this record was written from the landed PRs
 - **Created:** 2026-10-01
-- **Last updated:** 2026-10-03
+- **Last updated:** 2026-10-07
 - **RFC PR:** https://github.com/openclaw/openclaw-enterprise/pull/854
 - **Implementation:** [#696], [#711], [#726], [#730], [#737], [#739], [#741], [#742], [#745],
   [#747], [#793], [#807], [#811] (with the event from [#806]). Follow-ups: [#863], [#869],
-  [#876], [#879], [#896], [#928], [#933], [#939], [#967], [#969]
+  [#876], [#879], [#896], [#928], [#933], [#939], [#967], [#969], [#973], [#1096], [#1102],
+  [#1108], [#1187], [#1354], [#1362], [#1371]
 - **Related:** [Default production observability](0012-production-observability.md) (the
   Collector boundary), [Agent access](0010-agent-access.md) (native admin audience),
   [RFC-0001](0001-oidc-sign-in.md) (sign-in provider outages)
-- **Source baseline:** `main` at `04d01d02e`. Symbols below were checked there.
+- **Source baseline:** `main` at `bf67a4317`. Symbols below were checked there.
 
 <a id="problem-and-decision"></a>
 
@@ -111,10 +111,12 @@ accept only that type.
 - **Content classes.** Container lines are `operational`, sandbox lines `activity`.
   `content` (prompts, responses, tool output) has no producer; the serializer throws on it.
 - **Bounds.** 32 KiB in and 8 KiB out per line, 1000 lines and 512 KiB per page, 10 s per
-  request, a per-principal, per-Agent token bucket (2/s, burst 10) and 16 concurrent reads
-  per API replica (`RuntimeLogLimiter`).
+  request, a per-principal, per-Agent token bucket (2/s, burst 10) and 16 concurrent Driver
+  reads per API replica (`RuntimeLogLimiter`), applied after authorization ([#1187]).
 - Pod Event messages pass `maskRuntimeEventText`, which masks node, image, Secret and
   ConfigMap names in standard kubelet and scheduler shapes.
+- The console and `occ agent logs` show invisible or direction-changing characters in kept
+  text as escapes such as `\u202e` ([#1362], [#1371]).
 
 ### Views, cursors and audit
 
@@ -126,7 +128,10 @@ after 1 h ([packages/occ/src/runtime-logs/cursor.ts](../../packages/occ/src/runt
 delivered nothing resumes from its previous read, not the whole tail; the sandbox source
 floors its resume time at the first window's start ([#933]). A resumed page that fills the
 tail or is cut by the byte limit and starts after the cursor's line reports `window_exceeded`
-([#939]). Loss the API can
+([#939]), as does a quiet view's first byte-cut page ([#973]). A resumed view held behind
+one line longer than the 1 MiB read limit drops its delivered time once that line is more
+than 3 s older than the read, continues from that read, and reports the skipped lines as
+`window_exceeded` ([#1102], [#1108]). Loss the API can
 see becomes a `gap` record: `stream_replaced`, `window_exceeded`, `cursor_expired`,
 `truncated`, or `buffer_lost` for the sandbox ring.
 
@@ -142,7 +147,11 @@ diagnostics.
 - Runtime Events carry `container` (from `involvedObject.fieldPath`). `occ agent runtime`
   prints an Events table, and the console shows a record's `code` on the collapsed row.
   The wrapper's fixed line `Harness model authentication probe failed.` is an error
-  record.
+  record. Since [#1096], the `openclaw.model_probe` and `codex.model_probe` events keep a
+  failed probe's cause as `causeKind` and `causeDetail`, only from the closed
+  `runtimeFailureCause` vocabulary.
+- The Kubernetes Driver drops one scheduler `FailedScheduling` Event from runtime status:
+  the PVC binding conflict retry, once the Pod has a node ([#1354]).
 - Codex 0.158 prints span records at INFO, burying real events. The Harness wrapper pipes
   Codex stderr through `CODEX_STDERR_FILTER_HELPER`
   ([runtime-entrypoints.ts](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)).
@@ -189,8 +198,10 @@ The Collector boundary in RFC-0012 is unchanged. These bounded additions landed:
 | Lateral cluster actions | Log reads add only read grants: `pods/log get`, `events get,list`, OpenShell `sandbox:read`. The roles' `pods get,list` and `pods/proxy get` serve diagnostics. |
 | Resource abuse | Byte, line and time bounds, plus the token bucket and the concurrency cap. |
 
-The `501` switch and the rate limiter run before authorization. A principal with no
-grants learns only whether the feature is on, and spends only its own budget.
+The `501` switch runs before authorization, so a principal with no grants learns only
+whether the feature is on. Since [#1187] the rate and concurrency limits wrap only the
+Driver reads, after authorization: every denial is refused and audited, and spends no
+token.
 
 ## Rationale and alternatives
 
@@ -218,7 +229,8 @@ grants learns only whether the feature is on, and spends only its own budget.
   is bounded at 5 s and 48 lines. The 2000-line ring is lost on gateway restart. The OCSF
   fixture is derived from upstream source, not captured from a live OpenShell.
 - Kubernetes keeps only the current and previous container instance.
-- The Codex stderr filter is keyed to Codex 0.158 message shapes. A rename lets the noise
+- The Codex stderr filter is keyed to Codex 0.158 message shapes. The image has shipped
+  Codex 0.160.0 since [#1414], which left the filter unchanged. A rename lets the noise
   back rather than hiding other lines. Unless `RUST_LOG` is `debug` or `trace`, three
   records are suppressed on purpose: span enter/exit lines, the error-level
   missing-bubblewrap startup record, and the untrusted workspace `.codex` startup record.
@@ -281,3 +293,12 @@ grants learns only whether the feature is on, and spends only its own budget.
 [#939]: https://github.com/openclaw/openclaw-enterprise/pull/939
 [#967]: https://github.com/openclaw/openclaw-enterprise/pull/967
 [#969]: https://github.com/openclaw/openclaw-enterprise/pull/969
+[#973]: https://github.com/openclaw/openclaw-enterprise/pull/973
+[#1096]: https://github.com/openclaw/openclaw-enterprise/pull/1096
+[#1102]: https://github.com/openclaw/openclaw-enterprise/pull/1102
+[#1108]: https://github.com/openclaw/openclaw-enterprise/pull/1108
+[#1187]: https://github.com/openclaw/openclaw-enterprise/pull/1187
+[#1354]: https://github.com/openclaw/openclaw-enterprise/pull/1354
+[#1362]: https://github.com/openclaw/openclaw-enterprise/pull/1362
+[#1371]: https://github.com/openclaw/openclaw-enterprise/pull/1371
+[#1414]: https://github.com/openclaw/openclaw-enterprise/pull/1414
