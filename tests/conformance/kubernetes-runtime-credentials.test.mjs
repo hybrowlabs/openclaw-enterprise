@@ -101,6 +101,10 @@ function credentialFixture({
     ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
     status: { phase: "Active" },
   };
+  if (!twoCluster) {
+    // A single-cluster tenant holds its own canonical storage.
+    namespaceObject.metadata.labels["openclaw.dev/gateway-namespace"] = namespace.id;
+  }
   const controlNamespace = twoCluster
     ? {
         ...driver.gatewayNamespaceManifest({ namespaceId: namespace.id }),

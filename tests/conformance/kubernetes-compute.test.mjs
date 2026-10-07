@@ -2487,6 +2487,7 @@ test("Kubernetes namespace deletion waits for Sandbox namespace cleanup", async 
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": tenant.id,
+        "openclaw.dev/gateway-namespace": tenant.id,
       },
       annotations: { "openclaw.dev/namespace-id": tenant.id },
     },
@@ -2593,7 +2594,10 @@ test("explicit existing namespace adoption claims tenant identity only after sec
           return { items: claims ?? [] };
         },
         async readNamespace({ name }) {
-          if (name === kubernetesNamespaceName(tenant.id)) {
+          if (
+            name === kubernetesNamespaceName(tenant.id) ||
+            name === kubernetesGatewayNamespaceName(tenant.id)
+          ) {
             throw httpError(404);
           }
           assert.equal(name, selection.existingNamespace);
@@ -4529,6 +4533,7 @@ test("credential withdrawal revokes through the revision's exact Sandbox", async
     ...driver.manifest("v1", "Namespace", namespace, { namespaceId: tenant.id }),
     status: { phase: "Active" },
   };
+  namespaceResource.metadata.labels["openclaw.dev/gateway-namespace"] = tenant.id;
   let namespaceExists = true;
   driver.apiClients = Promise.resolve({
     core: {
@@ -5737,27 +5742,23 @@ test("Kubernetes runtime diagnostics read exact private Pod status without nativ
   const pods = { agent: pod("agent"), gateway: pod("gateway") };
   const proxyReads = [];
   const podListReads = [];
+  const tenantNamespace = () => {
+    const value = {
+      ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
+      status: { phase: "Active" },
+    };
+    value.metadata.labels["openclaw.dev/gateway-namespace"] = tenant.id;
+    return value;
+  };
   driver.apiClients = Promise.resolve({
     core: {
       async listNamespace({ labelSelector }) {
         assert.equal(labelSelector, `openclaw.dev/namespace=${tenant.id}`);
-        return {
-          apiVersion: "v1",
-          kind: "NamespaceList",
-          items: [
-            {
-              ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
-              status: { phase: "Active" },
-            },
-          ],
-        };
+        return { apiVersion: "v1", kind: "NamespaceList", items: [tenantNamespace()] };
       },
       async readNamespace({ name }) {
         assert.equal(name, namespaceName);
-        return {
-          ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
-          status: { phase: "Active" },
-        };
+        return tenantNamespace();
       },
       async listNamespacedPod({ namespace, labelSelector }) {
         const role = labelSelector.includes("openclaw.dev/workload-role=agent")
@@ -7284,6 +7285,7 @@ test("containment-only Sandbox cleanup retries after its Compute-owned workload 
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": revision.namespaceId,
+        "openclaw.dev/gateway-namespace": revision.namespaceId,
       },
       annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
     },
@@ -9560,6 +9562,7 @@ test("stopping a Kubernetes revision and retiring its predecessor retains Agent 
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": tenant.id,
+        "openclaw.dev/gateway-namespace": tenant.id,
       },
       annotations: { "openclaw.dev/namespace-id": tenant.id },
     },
@@ -9741,6 +9744,7 @@ for (const cutover of ["already deployed", "during Deployment deletion", "during
     const namespaceResource = driver.manifest("v1", "Namespace", namespace, {
       namespaceId: tenant.id,
     });
+    namespaceResource.metadata.labels["openclaw.dev/gateway-namespace"] = tenant.id;
     const gateway = driver.manifest("apps/v1", "Deployment", name, ownership, {
       name: namespace,
       plane: "execution",
@@ -9918,6 +9922,7 @@ test("stopping a containment-only Kubernetes revision removes its workload befor
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": revision.namespaceId,
+        "openclaw.dev/gateway-namespace": revision.namespaceId,
       },
       annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
     },
@@ -10066,6 +10071,7 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": revision.namespaceId,
+        "openclaw.dev/gateway-namespace": revision.namespaceId,
       },
       annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
     },
@@ -10198,6 +10204,7 @@ test("stop and retirement end credential-source access through Sandbox cleanup",
       labels: {
         "app.kubernetes.io/managed-by": "openclaw-enterprise",
         "openclaw.dev/namespace": revision.namespaceId,
+        "openclaw.dev/gateway-namespace": revision.namespaceId,
       },
       annotations: { "openclaw.dev/namespace-id": revision.namespaceId },
     },
@@ -13719,28 +13726,26 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
     },
   });
   const calls = [];
+  const tenantNamespace = () => {
+    const value = {
+      ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
+      status: { phase: "Active" },
+    };
+    if (!twoCluster) {
+      value.metadata.labels["openclaw.dev/gateway-namespace"] = tenant.id;
+    }
+    return value;
+  };
   const clientsFor = (plane) => ({
     core: {
       async listNamespace({ labelSelector }) {
         assert.equal(labelSelector, `openclaw.dev/namespace=${tenant.id}`);
         calls.push({ plane, call: "listNamespace" });
-        return {
-          apiVersion: "v1",
-          kind: "NamespaceList",
-          items: [
-            {
-              ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
-              status: { phase: "Active" },
-            },
-          ],
-        };
+        return { apiVersion: "v1", kind: "NamespaceList", items: [tenantNamespace()] };
       },
       async readNamespace({ name }) {
         assert.equal(name, namespaceName);
-        return {
-          ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
-          status: { phase: "Active" },
-        };
+        return tenantNamespace();
       },
       async listNamespacedPod({ namespace, labelSelector }) {
         const role = labelSelector.includes("openclaw.dev/workload-role=agent")
