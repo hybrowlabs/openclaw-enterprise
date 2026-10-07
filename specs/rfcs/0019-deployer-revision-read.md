@@ -9,7 +9,7 @@ author: freeqaz
 - **ID:** RFC-0019
 - **Created:** 2026-10-07
 - **Last updated:** 2026-10-07
-- **RFC PR:** this pull request
+- **RFC PR:** [#1606](https://github.com/openclaw/openclaw-enterprise/pull/1606)
 - **Implementation plan:** none; delivery is one pull request,
   [#1605](https://github.com/openclaw/openclaw-enterprise/pull/1605), listed under
   [Delivery](#delivery-and-verification).
