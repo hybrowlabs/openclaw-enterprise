@@ -98,11 +98,15 @@ model-auth selector. Kubernetes supports these combinations:
 | `api_key` with an OCC Secret   | Dedicated Codex                    | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
 | `codex_pat` with an OCC Secret | Dedicated Codex                    | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
 | `oauth` (**Experimental**)     | Dedicated Codex, no Sandbox Driver | Codex owns its credential bundle on [private storage](drivers/kubernetes-compute/codex-oauth-storage.md).         |
-| `chatgpt_service_account`      | Dedicated Codex                    | Only Codex receives the account token and forced workspace.                                                       |
+| `chatgpt_service_account`      | Dedicated Codex                    | Only Codex receives `CODEX_ACCESS_TOKEN`, using the same native token login as `codex_pat`.                       |
 | `credential_source`            | Dedicated Harness                  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
 
 A selected Sandbox uses only Compute's
 [rendered login mode and Secret projections](drivers/sandbox.md#provisioning-inputs).
+
+The `codex_pat` and `chatgpt_service_account` bindings both render
+`CODEX_LOGIN_MODE=codex_pat`. Their OCE source ownership and authorization remain
+distinct; native Codex derives account identity from the access token.
 
 A [`credential_source`](credential-sources.md) binding requires a selected
 Credential Gateway, the paired OpenShell Sandbox, a dedicated Codex or native

@@ -21,6 +21,14 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const scenario = fs.readFileSync("/fixture/scenario", "utf8");
 fs.appendFileSync("/home/node/calls", JSON.stringify(args) + "\n");
+if (scenario === "service-account") {
+  assert.equal(process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
+  assert.equal(args.some((arg) => arg.startsWith("forced_chatgpt_workspace_id=")), false);
+  if (args.includes("login")) {
+    assert.deepEqual(args, ["-c", "cli_auth_credentials_store=file", "login", "--with-access-token"]);
+    assert.equal(fs.readFileSync(0, "utf8"), "at-service-account-fixture");
+  }
+}
 if (scenario === "external") {
   // Inspect the actual launcher's output at both native process boundaries.
   assert.equal(args.includes("login"), false);
@@ -216,13 +224,28 @@ async function waitFor(check, diagnostics) {
 }
 
 test(
-  "generated Codex launcher hands external ChatGPT auth to the probe and app-server",
+  "generated Codex launcher hands model credentials to native processes",
   {
     skip: image ? false : "Set OCC_TEST_CODEX_PROBE_IMAGE to an immutable Node 24+ image.",
     timeout: 90000,
   },
   async (t) => {
     assert.match(image, /^(?:sha256:[a-f0-9]{64}|.+@sha256:[a-f0-9]{64})$/);
+    // Compute normalizes pasted and backend-issued tokens to this native login.
+    await t.test("service-account token", async (t) => {
+      const launcher = await startLauncher(t, "service-account", false, {
+        CODEX_LOGIN_MODE: "codex_pat",
+        CODEX_ACCESS_TOKEN: "at-service-account-fixture",
+      });
+      await waitFor(() => launcher.output().includes("APP_SERVER_STARTED"), launcher.errors);
+      const snapshot = await launcher.snapshot();
+      assert.equal(snapshot.ready, true);
+      assert.equal(snapshot.calls.length, 3);
+      assert.ok(snapshot.calls[0].includes("login"));
+      assert.ok(snapshot.calls[1].includes("exec"));
+      assert.ok(snapshot.calls[2].includes("app-server"));
+    });
+
     const auth = {
       CODEX_LOGIN_MODE: "chatgptAuthTokens",
       CODEX_ACCESS_TOKEN: "opaque-gateway-placeholder",

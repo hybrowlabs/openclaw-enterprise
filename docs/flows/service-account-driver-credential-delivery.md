@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-23
-last_updated_session: codex/01a0cf72-6985-7712-ba92-d8cc32470f24
+updated: 2026-10-07
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Service Account Driver Credential Delivery Flow
@@ -12,8 +12,8 @@ OCC starts with Installation Backend composition, then creates a
 Namespace-owned account, separately issues its provider-backed credential, and
 deploys an associated dedicated Codex Agent. The API owns the Backend client
 and upstream account calls; worker reconciliation repeats metadata checks before
-Compute projects the account Secret to Codex. This flow stops after Codex starts
-with the projected access token and workspace.
+Compute projects the account token to Codex. This flow stops after Codex starts
+with the projected access token.
 
 ## Entry Points
 
@@ -50,9 +50,9 @@ graph TD
     D --> L["Reauthorize deployment actor"]
     K --> L
     L --> M["Recheck Backend and binding metadata"]
-    M -->|valid dedicated Codex| N["Project account Secret into Codex"]
+    M -->|valid dedicated Codex| N["Project account token into Codex"]
     M -->|mismatch| O["Fail candidate"]
-    N --> P["Codex pins workspace and starts app server"]
+    N --> P["Codex authenticates token and starts app server"]
   end
 ```
 
@@ -97,8 +97,9 @@ query observes active pointers and pending work together during worker cutover.
 
 `OpenClawController.createServiceAccountCredential` authorizes account `update`
 before `ChatGPTServiceAccountDriver.createCredential` issues a Codex-scoped
-token. `KubernetesComputeDriver.storeServiceAccountCredential` stores it with
-the workspace ID in one account-owned control-plane Secret. The private credential ID, internal
+token. `KubernetesComputeDriver.storeServiceAccountCredential` stores it in one
+account-owned control-plane Secret. The private Backend binding retains workspace
+metadata. The private credential ID, internal
 credential reference, and audit changes commit together;
 confirmed failures compensate created provider and Kubernetes resources.
 
@@ -134,24 +135,26 @@ and issuance metadata leave the repository; upstream account IDs, admin keys,
 and credential values stay private.
 
 `KubernetesComputeDriver.prepareRevision` uses its internal `prepareHarnessAuth`
-rendering step and explicit login mode, then delivers the selected account fields
+rendering step and `CODEX_LOGIN_MODE=codex_pat`, then delivers the account token
 into a revision-owned data-plane Secret for dedicated Codex. Embedded execution
 is rejected for managed access tokens. The Gateway receives no model credential.
 The trusted worker reads the CP source and manages the DP projection; workload
-ServiceAccounts receive no Secret API permission.
+ServiceAccounts receive no Secret API permission. Workspace ownership remains
+part of control-plane validation, without a runtime workspace override.
 
-### 6. Authenticate Codex under the exact workspace
+### 6. Authenticate Codex with the account token
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`
 
-`AGENT_RUNTIME_ENTRYPOINT` authenticates with the projected token and workspace:
+`AGENT_RUNTIME_ENTRYPOINT` uses the same native login for Driver-issued account
+tokens and directly supplied `codex_pat` credentials:
 
 ```sh
-codex -c cli_auth_credentials_store=file \
-  -c forced_chatgpt_workspace_id="<workspace-id>" login --with-access-token
+codex -c cli_auth_credentials_store=file login --with-access-token
 ```
 
-It clears the token environment and starts its authenticated app server.
+Codex derives account identity from the token. The entrypoint clears the token
+environment and starts its authenticated app server.
 Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Debugging and Verification
@@ -181,6 +184,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Changelog
 
+- 2026-10-07 16:52: Use the shared Codex token login without a runtime workspace override; retain control-plane ownership checks. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)
 - 2026-09-23 12:22: Move canonical credential sources to CP and describe revision-scoped Harness delivery in the accompanying change. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 623d56dec26a8ef0f72b562254687cabecdbbf82)
 
 - 2026-09-17 00:31: Align credential selection and delivery with Agent harnessAuth and the shared Kubernetes rendering path. (01a0acc2-a404-77e3-b1a0-9fa4ffbbdb04 - d2bcbd1c53acb2582a774b5158f254d726abd33f)

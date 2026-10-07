@@ -3023,30 +3023,25 @@ startPluginRuntimeStatusServer();
 const loginMode = process.env.CODEX_LOGIN_MODE;
 const apiKey = process.env.OPENAI_API_KEY;
 const accessToken = process.env.CODEX_ACCESS_TOKEN;
-const workspaceId = process.env.CODEX_CHATGPT_WORKSPACE_ID;
 const externalAccount = process.env.OCE_CODEX_CHATGPT_ACCOUNT;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
 if (loginMode !== "chatgptAuthTokens" && externalAccount !== undefined) {
   throw new Error("External ChatGPT metadata requires external authentication.");
 }
 if (loginMode === "api_key") {
-  if (!nonempty(apiKey) || accessToken !== undefined || workspaceId !== undefined) {
+  if (!nonempty(apiKey) || accessToken !== undefined) {
     throw new Error("Codex API-key authentication configuration is invalid.");
   }
 } else if (loginMode === "codex_pat") {
-  if (!nonempty(accessToken) || !accessToken.startsWith("at-") || workspaceId !== undefined || apiKey !== undefined) {
+  if (!nonempty(accessToken) || apiKey !== undefined) {
     throw new Error("Codex service account token authentication configuration is invalid.");
   }
-} else if (loginMode === "chatgpt_service_account") {
-  if (!nonempty(accessToken) || !nonempty(workspaceId) || apiKey !== undefined) {
-    throw new Error("Codex service-account authentication configuration is invalid.");
-  }
 } else if (loginMode === "oauth") {
-  if (apiKey !== undefined || accessToken !== undefined || workspaceId !== undefined) {
+  if (apiKey !== undefined || accessToken !== undefined) {
     throw new Error("Codex OAuth authentication configuration is invalid.");
   }
 } else if (loginMode === "chatgptAuthTokens") {
-  if (!nonempty(accessToken) || !nonempty(externalAccount) || apiKey !== undefined || workspaceId !== undefined) {
+  if (!nonempty(accessToken) || !nonempty(externalAccount) || apiKey !== undefined) {
     throw new Error("Codex external authentication configuration is invalid.");
   }
 } else {
@@ -3070,15 +3065,7 @@ if (pluginRuntime !== undefined) {
 }
 const loginArguments = loginMode === "api_key"
   ? ["-c", "cli_auth_credentials_store=file", "login", "--with-api-key"]
-  : [
-      "-c",
-      "cli_auth_credentials_store=file",
-      ...(loginMode === "chatgpt_service_account" ? [
-        "-c", "forced_chatgpt_workspace_id=" + JSON.stringify(workspaceId),
-      ] : []),
-      "login",
-      "--with-access-token",
-    ];
+  : ["-c", "cli_auth_credentials_store=file", "login", "--with-access-token"];
 function codexChildEnvironment() {
   const environment = { ...process.env };
   delete environment.APP_SERVER_TOKEN;
@@ -3175,7 +3162,6 @@ if (login.status !== 0 || login.error) {
 } else {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
-delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
 delete process.env.OCE_CODEX_CHATGPT_ACCOUNT;
 
 // Codex reports an in-turn stream retry as a top-level error before retrying the
@@ -3224,9 +3210,6 @@ function probeCodexAuthentication(timeout) {
       "-c", 'web_search="disabled"',
       "-c", "project_doc_max_bytes=0",
       "-c", "check_for_update_on_startup=false",
-      ...(loginMode === "chatgpt_service_account" ? [
-        "-c", "forced_chatgpt_workspace_id=" + JSON.stringify(workspaceId),
-      ] : []),
       "Reply only READY. Do not use tools.",
     ], {
       cwd: directory,

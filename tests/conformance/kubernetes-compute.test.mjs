@@ -4297,10 +4297,9 @@ test("account-owned Kubernetes Secrets reject invalid or foreign credentials bef
     .slice(0, 32)}`;
 
   for (const invalid of [
-    { namespaceId: "", serviceAccountId, accessToken: "token", workspaceId: "ws_1" },
-    { namespaceId: tenant.id, serviceAccountId: "", accessToken: "token", workspaceId: "ws_1" },
-    { namespaceId: tenant.id, serviceAccountId, accessToken: "", workspaceId: "ws_1" },
-    { namespaceId: tenant.id, serviceAccountId, accessToken: "token", workspaceId: "" },
+    { namespaceId: "", serviceAccountId, accessToken: "token" },
+    { namespaceId: tenant.id, serviceAccountId: "", accessToken: "token" },
+    { namespaceId: tenant.id, serviceAccountId, accessToken: "" },
   ]) {
     // Incomplete account credentials cannot trigger Kubernetes requests or Secret mutations.
     await assert.rejects(driver.storeServiceAccountCredential(invalid), /must be explicitly/i);
@@ -4322,7 +4321,7 @@ test("account-owned Kubernetes Secrets reject invalid or foreign credentials bef
   }
 });
 
-test("dedicated Codex projects the account-owned token and workspace without exposing either to its gateway", () => {
+test("dedicated Codex uses the same token login for an account-owned credential without a workspace override", () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
@@ -4369,16 +4368,13 @@ test("dedicated Codex projects the account-owned token and workspace without exp
     workload.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
   );
 
-  // Both values come from the one immutable account-owned reference; no Agent copy is created.
+  // Account ownership stays in the control plane; native login needs only its token.
   assert.deepEqual(agentEnvironment.CODEX_ACCESS_TOKEN.valueFrom.secretKeyRef, {
     name: secretName,
     key: "token",
   });
-  assert.deepEqual(agentEnvironment.CODEX_CHATGPT_WORKSPACE_ID.valueFrom.secretKeyRef, {
-    name: secretName,
-    key: "workspace-id",
-  });
-  assert.equal(agentEnvironment.CODEX_LOGIN_MODE.value, "chatgpt_service_account");
+  assert.equal(agentEnvironment.CODEX_CHATGPT_WORKSPACE_ID, undefined);
+  assert.equal(agentEnvironment.CODEX_LOGIN_MODE.value, "codex_pat");
   assert.equal(agentEnvironment.OPENAI_API_KEY, undefined);
   assert.equal(agentEnvironment.SLACK_APP_TOKEN, undefined);
   assert.equal(agentEnvironment.SLACK_BOT_TOKEN, undefined);

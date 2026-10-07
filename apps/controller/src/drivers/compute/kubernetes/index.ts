@@ -891,20 +891,16 @@ function prepareHarnessAuth(
     harness.mode === "dedicated" &&
     harness.id === "codex"
   ) {
-    environment.push(
-      secret(CODEX_ACCESS_TOKEN, resolvedAuth.credential.secretRef),
-      secret(CODEX_CHATGPT_WORKSPACE_ID, {
-        name: resolvedAuth.credential.secretRef.name,
-        key: SERVICE_ACCOUNT_WORKSPACE_KEY,
-      }),
-    );
+    environment.push(secret(CODEX_ACCESS_TOKEN, resolvedAuth.credential.secretRef));
   } else {
     throw new ConfigurationFailure("Harness authentication method is unsupported.");
   }
+  const loginMode =
+    resolvedAuth.method === "chatgpt_service_account" ? "codex_pat" : resolvedAuth.method;
   if (harness.mode === "dedicated" && harness.id === "codex") {
-    environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.method });
+    environment.push({ name: "CODEX_LOGIN_MODE", value: loginMode });
   }
-  return { loginMode: resolvedAuth.method, environment };
+  return { loginMode, environment };
 }
 
 const MANAGER = "openclaw-enterprise";
@@ -995,9 +991,7 @@ const TRUSTED_PROXY_IDENTITY = "occ-workspace-files";
 const TRUSTED_PROXY_HEADER = "x-occ-identity";
 const MODEL_API_KEY = "OPENAI_API_KEY";
 const SERVICE_ACCOUNT_TOKEN_KEY = "token";
-const SERVICE_ACCOUNT_WORKSPACE_KEY = "workspace-id";
 const CODEX_ACCESS_TOKEN = "CODEX_ACCESS_TOKEN";
-const CODEX_CHATGPT_WORKSPACE_ID = "CODEX_CHATGPT_WORKSPACE_ID";
 const MAX_RUNTIME_CREDENTIAL_BYTES = 65_536;
 const MAX_RUNTIME_STATUS_RESPONSE_BYTES = 65_536;
 const RUNTIME_STATUS_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
@@ -3371,12 +3365,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     readonly namespaceId: string;
     readonly serviceAccountId: string;
     readonly accessToken: string;
-    readonly workspaceId: string;
   }): Promise<{ readonly name: string; readonly key: string }> {
     const namespaceId = required(input.namespaceId, "ServiceAccount Namespace ID");
     const serviceAccountId = required(input.serviceAccountId, "ServiceAccount ID");
     const accessToken = required(input.accessToken, "ServiceAccount access token");
-    const workspaceId = required(input.workspaceId, "ServiceAccount workspace ID");
     const namespace = await this.controlNamespace(namespaceId);
     const observed = await this.getNamespace(namespace);
     if (observed === undefined || observed.status?.phase !== "Active") {
@@ -3401,7 +3393,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
             type: "Opaque",
             stringData: {
               [SERVICE_ACCOUNT_TOKEN_KEY]: accessToken,
-              [SERVICE_ACCOUNT_WORKSPACE_KEY]: workspaceId,
             },
           },
         }),

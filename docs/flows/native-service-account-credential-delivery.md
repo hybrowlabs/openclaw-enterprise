@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-10-03
-last_updated_session: 01a0fe72-58b2-7cc3-b770-7310f5401deb
+updated: 2026-10-07
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Harness Authentication Binding Flow
@@ -146,7 +146,8 @@ backend ownership from OCC state and passes an ephemeral `ComputeRevisionContext
 without reading credential bytes or rewriting the revision. Compute then reads
 the canonical CP source, verifies the admitted Secret UID or managed-account
 ownership, and delivers only selected fields into the DP revision Secret.
-Missing or replaced sources fail preparation. ChatGPT retains the exact account token/workspace source.
+Missing or replaced sources fail preparation. Managed ChatGPT accounts retain the exact
+token source; their private Backend binding owns workspace metadata.
 Inactive revision history keeps references without retaining their sources
 indefinitely; drafts, active revisions, and pending deployments block source deletion.
 
@@ -160,9 +161,9 @@ Secret projections and a closed login mode. Embedded OpenClaw receives the key
 in its combined workload as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, derived
 from the immutable native model Configuration; admission requires all selected
 models and fallbacks to use the same supported provider. Dedicated Codex receives
-the key or account token/workspace through a revision-owned DP projection. A
-directly supplied service account token delivers only `CODEX_ACCESS_TOKEN` as the
-model credential; its separate Gateway receives none.
+the key or account token through a revision-owned DP projection. Both managed
+and directly supplied service account tokens deliver only `CODEX_ACCESS_TOKEN`
+as the model credential; the separate Gateway receives none.
 Neither gateway-only Configuration secret bindings nor initial runtime
 provisioning, which creates only transport/channel groups, can supply model auth.
 
@@ -178,7 +179,10 @@ and Kubernetes workload identity credentials stay separate.
 `GATEWAY_RUNTIME_ENTRYPOINT`
 
 Codex consumes explicit `CODEX_LOGIN_MODE`: API-key login receives the key through
-stdin; managed account login forces the admitted workspace; direct service account token login uses `--with-access-token` without a caller-supplied workspace, and native whoami validates and hydrates identity. Credential environment variables are deleted before the probe and app-server start. Missing or conflicting
+stdin; managed and directly supplied service account tokens both use `codex_pat`
+and `--with-access-token`. Native whoami validates and hydrates identity from the
+token, without a runtime workspace override. Credential environment variables
+are deleted before the probe and app-server start. Missing or conflicting
 inputs, failed login, or a failed bounded native turn against the primary model
 (under the restricted [probe policy](../reference/harness-execution.md#harness-authentication))
 prevent app-server startup and readiness. API-key and service-account login
@@ -291,6 +295,7 @@ Secret updates from resetting custody.
 
 ## Changelog
 
+- 2026-10-07 16:53: Normalize managed and supplied service-account credentials to token-only Codex login while preserving control-plane workspace ownership. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)
 - 2026-10-03 15:38: Merge current credential flow while preserving shared-namespace source placement. (01a0fe72-58b2-7cc3-b770-7310f5401deb - 94364ae9)
 
 - 2026-10-02: Clarify shared namespace source custody. (01a0fe72-58b2-7cc3-b770-7310f5401deb)
