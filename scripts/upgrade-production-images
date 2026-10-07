@@ -272,8 +272,8 @@ trap 'cleanup_preflight; rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true
 # and service account, with the candidate Installation in a temporary Secret.
 # Configuration the image rejects, such as a presets.files entry naming a file
 # the image no longer ships, or Kubernetes state its Compute preflight refuses,
-# such as split-layout Gateway storage, would otherwise crash-loop both after the
-# migration.
+# such as two namespaces claiming one Namespace's canonical storage, would
+# otherwise crash-loop both after the migration.
 preflight_startup() {
   local suffix secret component pod phase waiting deadline remaining_seconds message failures refusal name_refusal
   suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
@@ -359,7 +359,7 @@ preflight_startup() {
             message="the $component startup preflight stopped: $name_refusal (INSTALLATION_NAME_INVALID) No OCC writer was stopped; the old release keeps serving. Rename the Installation as in docs/guides/deploy/production-upgrade-recovery.md#correct-an-invalid-installation-name, then start again with a new evidence directory."
           elif [[ -n "$refusal" ]]; then
             message="the $component startup preflight stopped: $refusal No OCC writer was stopped; the old release keeps serving."
-            if [[ "$refusal" == *split-layout* ]]; then
+            if [[ "$refusal" == *"claim canonical storage"* ]]; then
               message+=" See docs/reference/drivers/kubernetes-compute.md#existing-split-layout-installations."
             else
               message+=" The Pod uses the installed release's service account and RBAC and only the chart's dependency egress (preflight-networkpolicy.json); fix its Kubernetes API access and start again with a new evidence directory."

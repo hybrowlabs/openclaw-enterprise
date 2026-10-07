@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { KubernetesSecretDriver } from "../../apps/controller/src/drivers/secret/kubernetes/index.ts";
 import {
   fixtureImage,
   requiresKubernetes,
@@ -92,36 +93,118 @@ test(
     // used for Namespace lifecycle without reporting the CI-supported 1.35 family as advisory.
     assert.deepEqual(await driver.preflight(), { warnings: [] });
 
-    // Refuse an existing split layout before controller startup can mutate tenant
-    // labels or create empty replacement state in another namespace.
-    // Until it is gone, this Namespace fails every single-cluster Compute preflight in
-    // the cluster (driver.preflight, worker start, development composition). Under
+    // A tenant created by the release before the shared layout keeps its separate Gateway
+    // and storage namespace: preflight accepts it, and ensure, Secret storage and deletion
+    // keep using it without moving anything. Both namespaces and the operator's tenant
+    // RoleBindings are built as that release required. While the ambiguous state below is
+    // labelled, every single-cluster Compute preflight in the cluster refuses; under
     // fileConcurrency, keep this file's lane free of other files that preflight.
     const legacyOwner = namespace("split-upgrade");
+    const legacyTenant = kubernetesNamespaceName(legacyOwner.id);
     const legacyName = `oce-gateways-${hash(legacyOwner.id, 24)}`;
-    await kubectl("create", "namespace", legacyName);
+    const restricted = ["enforce", "audit", "warn"].map(
+      (mode) => `pod-security.kubernetes.io/${mode}=restricted`,
+    );
     try {
-      await kubectl(
-        "label",
-        "namespace",
-        legacyName,
-        "app.kubernetes.io/managed-by=openclaw-enterprise",
-        `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
-      );
-      await kubectl(
-        "annotate",
-        "namespace",
-        legacyName,
-        `openclaw.dev/namespace-id=${legacyOwner.id}`,
-      );
+      for (const [name, labels] of [
+        [legacyTenant, [`openclaw.dev/namespace=${legacyOwner.id}`]],
+        [legacyName, [`openclaw.dev/gateway-namespace=${legacyOwner.id}`]],
+      ]) {
+        await kubectl("create", "namespace", name);
+        await kubectl(
+          "label",
+          "namespace",
+          name,
+          "app.kubernetes.io/managed-by=openclaw-enterprise",
+          ...labels,
+          ...restricted,
+        );
+        await kubectl("annotate", "namespace", name, `openclaw.dev/namespace-id=${legacyOwner.id}`);
+        await kubectl(
+          "create",
+          "rolebinding",
+          "openclaw-controller",
+          "--namespace",
+          name,
+          `--clusterrole=${controller.tenantRole}`,
+          `--serviceaccount=${platformNamespace}:${controller.account}`,
+        );
+      }
       const before = await resource("namespace", legacyName);
-      await assert.rejects(driver.preflight(), /Existing split-layout Gateway storage/);
+      assert.deepEqual(await driver.preflight(), { warnings: [] });
+      await waitFor(`legacy Namespace ${legacyOwner.id} to become ready`, async () => {
+        const observation = await driver.ensureNamespace(legacyOwner);
+        assert.notEqual(observation.failure, "permanent");
+        return observation.namespaceReady ? observation : undefined;
+      });
       const after = await resource("namespace", legacyName);
       assert.equal(after.metadata.uid, before.metadata.uid);
       assert.deepEqual(after.metadata.labels, before.metadata.labels);
-      assert.equal(await missing("namespace", kubernetesNamespaceName(legacyOwner.id)), true);
+      assert.equal(
+        (await resource("namespace", legacyTenant)).metadata.labels[
+          "openclaw.dev/gateway-namespace"
+        ],
+        undefined,
+      );
+      await resource("resourcequota", "openclaw-quota", legacyName);
+      await resource("limitrange", "openclaw-limits", legacyName);
+      const storage = JSON.parse(
+        await kubectl(
+          "get",
+          "namespaces",
+          "-l",
+          `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
+          "-o",
+          "json",
+        ),
+      ).items.map(({ metadata }) => metadata.name);
+      assert.deepEqual(storage, [legacyName]);
+      // Canonical Secrets resolve to the legacy namespace through the real label selector.
+      const secrets = new KubernetesSecretDriver({ authentication: controller.authentication });
+      const identity = {
+        id: `sec_${randomUUID()}`,
+        namespaceId: legacyOwner.id,
+        name: "legacy model key",
+      };
+      const reference = await secrets.create(identity, "legacy-value");
+      assert.equal(reference.namespaceName, legacyName);
+      assert.equal(
+        await secrets.withValue(
+          { ...identity, driverId: secrets.id, backendRef: reference },
+          async (value) => value,
+        ),
+        "legacy-value",
+      );
+
+      // A second storage target for the same Namespace is refused before any reconcile.
+      await kubectl(
+        "label",
+        "namespace",
+        legacyTenant,
+        `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
+      );
+      await assert.rejects(driver.preflight(), /both claim canonical storage/);
+      await kubectl("label", "namespace", legacyTenant, "openclaw.dev/gateway-namespace-");
+
+      await waitFor(`legacy Namespace ${legacyOwner.id} deletion`, async () => {
+        const observation = await driver.deleteNamespace({ ...legacyOwner, status: "deleting" });
+        assert.notEqual(observation.failure, "permanent");
+        return observation.namespaceDeleted ? observation : undefined;
+      });
+      await waitFor(`legacy namespaces to disappear`, async () =>
+        (await missing("namespace", legacyName)) && (await missing("namespace", legacyTenant))
+          ? true
+          : undefined,
+      );
     } finally {
-      await kubectl("delete", "namespace", legacyName, "--wait=true");
+      await kubectl(
+        "delete",
+        "namespace",
+        legacyName,
+        legacyTenant,
+        "--ignore-not-found=true",
+        "--wait=true",
+      );
     }
     assert.deepEqual(await driver.preflight(), { warnings: [] });
 

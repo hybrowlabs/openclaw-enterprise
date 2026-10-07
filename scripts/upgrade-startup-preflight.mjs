@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 
 // Printed before the image's own message when Compute preflight stops startup:
-// a refusal is the Driver's ConfigurationFailure (such as split-layout storage);
+// a refusal is the Driver's ConfigurationFailure (such as two storage targets);
 // anything else, such as a denied or unreachable Kubernetes API, is incomplete.
 const computeRefusal = "Kubernetes Compute startup preflight refused the candidate release:";
 const computeIncomplete = "Kubernetes Compute startup preflight could not complete:";
@@ -19,7 +19,8 @@ const nameVariable = "OCC_UPGRADE_PREFLIGHT_INSTALLATION_NAME";
 // environment, loads Drivers and Preset files, and never opens the database.
 // With the bundled Kubernetes Compute Driver it then runs that Driver's startup
 // preflight, which reads the Kubernetes version and Namespaces with the Pod's
-// service account; it refuses, for example, single-cluster split-layout storage.
+// service account; it refuses, for example, two namespaces claiming one
+// Namespace's canonical storage.
 // Other Compute Drivers keep the load-only check.
 const startupCheck = `
 let drivers;

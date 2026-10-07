@@ -203,50 +203,71 @@ test(
       authSecret,
       authBaseURL,
     };
-    // Both supported startup callers must reject old storage before admitting
-    // API writes or claiming work, even when running the development profile.
-    // Until it is gone, this Namespace fails every single-cluster Compute preflight in
-    // the cluster (driver.preflight, worker start, development composition). Under
-    // fileConcurrency, keep this file's lane free of other files that preflight.
+    // Both supported startup callers must refuse two storage targets for one Namespace
+    // before admitting API writes or claiming work, even in the development profile, and
+    // must accept a legacy Gateway namespace kept from the release before the shared layout.
+    // While the ambiguous state is labelled, every single-cluster Compute preflight in the
+    // cluster refuses. Under fileConcurrency, keep this file's lane free of other files that
+    // preflight.
     const legacyOwner = namespace("dev-upgrade");
     const legacyName = `oce-gateways-${hash(legacyOwner.id, 24)}`;
+    const ambiguousName = kubernetesNamespaceName(legacyOwner.id);
+    context.after(async () => {
+      await kubectl(
+        "delete",
+        "namespace",
+        legacyName,
+        ambiguousName,
+        "--ignore-not-found=true",
+        "--wait=false",
+      );
+    });
     await kubectl("create", "namespace", legacyName);
+    await kubectl(
+      "label",
+      "namespace",
+      legacyName,
+      "app.kubernetes.io/managed-by=openclaw-enterprise",
+      `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
+    );
+    await kubectl(
+      "annotate",
+      "namespace",
+      legacyName,
+      `openclaw.dev/namespace-id=${legacyOwner.id}`,
+    );
+    await kubectl("create", "namespace", ambiguousName);
     try {
       await kubectl(
         "label",
         "namespace",
-        legacyName,
+        ambiguousName,
         "app.kubernetes.io/managed-by=openclaw-enterprise",
+        `openclaw.dev/namespace=${legacyOwner.id}`,
         `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
-      );
-      await kubectl(
-        "annotate",
-        "namespace",
-        legacyName,
-        `openclaw.dev/namespace-id=${legacyOwner.id}`,
       );
       const before = await resource("namespace", legacyName);
       await assert.rejects(async () => {
         const unexpected = await composePostgresDevelopment(developmentConfig, drivers);
         await unexpected.close();
-      }, /Existing split-layout Gateway storage/);
+      }, /both claim canonical storage/);
       const rejectedWorker = createControllerWorker({
         pool: new pg.Pool({ connectionString: databaseUrl, max: 2 }),
         drivers,
         emit: () => {},
       });
       try {
-        await assert.rejects(rejectedWorker.start(), /Existing split-layout Gateway storage/);
+        await assert.rejects(rejectedWorker.start(), /both claim canonical storage/);
       } finally {
         await rejectedWorker.stop();
       }
       const after = await resource("namespace", legacyName);
       assert.equal(after.metadata.uid, before.metadata.uid);
       assert.deepEqual(after.metadata.labels, before.metadata.labels);
-      assert.equal(await missing("namespace", kubernetesNamespaceName(legacyOwner.id)), true);
     } finally {
-      await kubectl("delete", "namespace", legacyName, "--wait=true");
+      await kubectl("delete", "namespace", ambiguousName, "--wait=true");
     }
+    // The legacy namespace alone stays in place and no longer blocks startup below.
     app = await composePostgresDevelopment(developmentConfig, drivers);
     const session = await signInToControllerApp(app, adminCredentials);
 

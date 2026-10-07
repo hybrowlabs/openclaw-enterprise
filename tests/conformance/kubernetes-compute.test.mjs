@@ -2984,37 +2984,43 @@ function namespaceLifecycleCluster(initial) {
   const objects = new Map(initial.map((object) => [clusterKey(object), structuredClone(object)]));
   const calls = [];
   const notFound = () => Object.assign(new Error("Not found"), { statusCode: 404 });
-  const read = (kind) => async ({ name, namespace }) => {
-    const object = objects.get(clusterKey({ kind, metadata: { name, namespace } }));
-    if (object === undefined) {
-      throw notFound();
-    }
-    return structuredClone(object);
-  };
-  const patch = (kind) => async ({ name, namespace, body }) => {
-    calls.push(["patch", kind, namespace ?? "", name]);
-    const key = clusterKey({ kind, metadata: { name, namespace } });
-    const existing = objects.get(key);
-    const next = {
-      ...structuredClone(body),
-      metadata: {
-        ...existing?.metadata,
-        ...body.metadata,
-        labels: { ...existing?.metadata.labels, ...body.metadata.labels },
-        annotations: { ...existing?.metadata.annotations, ...body.metadata.annotations },
-        uid: existing?.metadata.uid ?? `${name}-uid`,
-      },
-      ...(existing?.status === undefined ? {} : { status: existing.status }),
+  const read =
+    (kind) =>
+    async ({ name, namespace }) => {
+      const object = objects.get(clusterKey({ kind, metadata: { name, namespace } }));
+      if (object === undefined) {
+        throw notFound();
+      }
+      return structuredClone(object);
     };
-    objects.set(key, next);
-    return structuredClone(next);
-  };
+  const patch =
+    (kind) =>
+    async ({ name, namespace, body }) => {
+      calls.push(["patch", kind, namespace ?? "", name]);
+      const key = clusterKey({ kind, metadata: { name, namespace } });
+      const existing = objects.get(key);
+      const next = {
+        ...structuredClone(body),
+        metadata: {
+          ...existing?.metadata,
+          ...body.metadata,
+          labels: { ...existing?.metadata.labels, ...body.metadata.labels },
+          annotations: { ...existing?.metadata.annotations, ...body.metadata.annotations },
+          uid: existing?.metadata.uid ?? `${name}-uid`,
+        },
+        ...(existing?.status === undefined ? {} : { status: existing.status }),
+      };
+      objects.set(key, next);
+      return structuredClone(next);
+    };
   const core = {
     async listNamespace({ labelSelector }) {
       const [label, value] = labelSelector.split("=");
       return {
         items: [...objects.values()]
-          .filter(({ kind, metadata }) => kind === "Namespace" && metadata.labels?.[label] === value)
+          .filter(
+            ({ kind, metadata }) => kind === "Namespace" && metadata.labels?.[label] === value,
+          )
           .map((object) => structuredClone(object)),
       };
     },
@@ -3082,9 +3088,11 @@ test("a legacy single-cluster tenant keeps its Gateway namespace through ensure 
     undefined,
   );
   assert.deepEqual(
-    (await cluster.clients.core.listNamespace({
-      labelSelector: `openclaw.dev/gateway-namespace=${tenant.id}`,
-    })).items.map(({ metadata }) => metadata.name),
+    (
+      await cluster.clients.core.listNamespace({
+        labelSelector: `openclaw.dev/gateway-namespace=${tenant.id}`,
+      })
+    ).items.map(({ metadata }) => metadata.name),
     [legacyName],
   );
   // Both namespaces get their infrastructure; the legacy one only through apply, never create.
@@ -3097,7 +3105,10 @@ test("a legacy single-cluster tenant keeps its Gateway namespace through ensure 
       assert.ok(cluster.objects.has(`${kind}:${namespace}:${name}`), `${kind} in ${namespace}`);
     }
   }
-  assert.equal(cluster.calls.some(([action]) => action === "create"), false);
+  assert.equal(
+    cluster.calls.some(([action]) => action === "create"),
+    false,
+  );
 
   // An ambiguous adoption cannot add a second storage target beside the legacy namespace.
   const adopted = {
@@ -11688,7 +11699,11 @@ for (const layout of ["single-cluster", "two-cluster", "legacy single-cluster"])
       assert.equal(gateway.metadata.namespace, legacyNamespace);
       assert.equal(harness.metadata.namespace, namespace);
       assert.equal(sourceKey, `Secret:${legacyNamespace}:occ-model-key`);
-      assert.ok(objects.has(`PersistentVolumeClaim:${legacyNamespace}:gateway-state-${digest(revision.agentId)}`));
+      assert.ok(
+        objects.has(
+          `PersistentVolumeClaim:${legacyNamespace}:gateway-state-${digest(revision.agentId)}`,
+        ),
+      );
       assert.equal(
         objects.has(`PersistentVolumeClaim:${namespace}:gateway-state-${digest(revision.agentId)}`),
         false,

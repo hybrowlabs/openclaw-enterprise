@@ -1367,11 +1367,12 @@ test("an Installation read without a stored name stops before any preflight Pod"
   ]);
 });
 
-// Releases with the shared tenant namespace refuse to start on a single-cluster
-// Installation that still has split-layout Gateway storage. The startup preflight
-// runs that Compute check with the selected image before quiescence, so the old
-// release keeps serving and the operator is pointed at the documented options.
-test("split-layout Gateway storage stops the startup preflight before any writer stops", async (t) => {
+// A single-cluster release refuses to start when two Kubernetes namespaces claim
+// canonical storage for one Namespace (a legacy Gateway namespace alone is kept).
+// The startup preflight runs that Compute check with the selected image before
+// quiescence, so the old release keeps serving and the operator is pointed at the
+// documented options.
+test("two storage targets for one Namespace stop the startup preflight before any writer stops", async (t) => {
   if (!realHelm) {
     t.skip("helm is unavailable to render the real chart");
     return;
@@ -1387,6 +1388,15 @@ test("split-layout Gateway storage stops the startup preflight before any writer
           labels: { "openclaw.dev/gateway-namespace": namespaceId },
         },
       },
+      {
+        metadata: {
+          name: "adopted-tenant",
+          labels: {
+            "openclaw.dev/namespace": namespaceId,
+            "openclaw.dev/gateway-namespace": namespaceId,
+          },
+        },
+      },
     ],
   });
   await assert.rejects(f.run(), (error) => {
@@ -1394,7 +1404,7 @@ test("split-layout Gateway storage stops the startup preflight before any writer
       assert.match(
         error.stderr,
         new RegExp(
-          `the ${component} startup preflight stopped: Kubernetes Compute startup preflight refused the candidate release: Existing split-layout Gateway storage prevents this single-cluster upgrade\\..* No OCC writer was stopped; the old release keeps serving\\. See docs/reference/drivers/kubernetes-compute\\.md#existing-split-layout-installations\\.`,
+          `the ${component} startup preflight stopped: Kubernetes Compute startup preflight refused the candidate release: Kubernetes namespaces adopted-tenant and ${kubernetesGatewayNamespaceName(namespaceId)} both claim canonical storage for Namespace ${namespaceId}\\..* No OCC writer was stopped; the old release keeps serving\\. See docs/reference/drivers/kubernetes-compute\\.md#existing-split-layout-installations\\.`,
         ),
       );
     }
@@ -1433,7 +1443,7 @@ test("a denied Kubernetes API stops the startup preflight as incomplete", async 
         ),
       );
     }
-    assert.doesNotMatch(error.stderr, /refused the candidate release|split-layout/);
+    assert.doesNotMatch(error.stderr, /refused the candidate release|canonical storage/);
     return true;
   });
   const state = await f.state();
