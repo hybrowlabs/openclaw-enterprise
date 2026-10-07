@@ -655,6 +655,28 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     /controlPlane.authBaseUrl host must be inside controlPlane.sharedCookieDomain/,
   );
 
+  // The API refuses a public-suffix cookie domain at startup (tldts, private registries
+  // included); preflight uses the same list. Helm has none, so the chart renders these.
+  const nativeAdminUnder = (sharedCookieDomain) =>
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: `https://console.${sharedCookieDomain}`,
+        agentNativeAdminDomain: `agents.${sharedCookieDomain}`,
+        sharedCookieDomain,
+      },
+    });
+  for (const sharedCookieDomain of ["co.uk", "github.io", "CO.UK", "192.0.2.1"]) {
+    assertPreflightFailure(
+      "codex",
+      nativeAdminUnder(sharedCookieDomain),
+      /controlPlane.sharedCookieDomain must not be a public suffix/,
+    );
+  }
+  for (const sharedCookieDomain of ["example.co.uk", "oce.github.io"]) {
+    assert.equal(render("codex", nativeAdminUnder(sharedCookieDomain)).summary.ok, true);
+  }
+
   assertPreflightFailure(
     "codex",
     codexInput({

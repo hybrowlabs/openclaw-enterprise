@@ -641,6 +641,7 @@ const invalid = [
     values: githubOn,
     chart: /auth\.github requires agentNativeAdmin\.enabled: false/,
     github: true,
+    code: "EXTERNAL_SIGN_IN_NATIVE_ADMIN_UNSUPPORTED",
     env: {
       OCC_AGENT_NATIVE_ADMIN_ENABLED: "true",
       OCC_AGENT_NATIVE_ADMIN_DOMAIN: "agents.oce.example.internal",
@@ -761,6 +762,7 @@ const invalid = [
     values: googleOn,
     chart: /auth\.google requires agentNativeAdmin\.enabled: false/,
     google: true,
+    code: "EXTERNAL_SIGN_IN_NATIVE_ADMIN_UNSUPPORTED",
     env: {
       OCC_AGENT_NATIVE_ADMIN_ENABLED: "true",
       OCC_AGENT_NATIVE_ADMIN_DOMAIN: "agents.oce.example.internal",
@@ -867,6 +869,7 @@ const invalid = [
     values: { ...oidcUpgradeValues(recoveryUserId), "agentNativeAdmin.enabled": "true" },
     chart: /auth\.oidc requires agentNativeAdmin\.enabled: false/,
     oidc: true,
+    code: "EXTERNAL_SIGN_IN_NATIVE_ADMIN_UNSUPPORTED",
     env: {
       OCC_AGENT_NATIVE_ADMIN_ENABLED: "true",
       OCC_AGENT_NATIVE_ADMIN_DOMAIN: "agents.oce.example.internal",
@@ -874,6 +877,9 @@ const invalid = [
     },
   },
 ];
+
+// Refusals with a named startup code; every other entry stops with STARTUP_FAILED.
+const startupCodes = new Map(invalid.flatMap(({ name, code }) => (code ? [[name, code]] : [])));
 
 test("values the chart refuses are settings the API also refuses", tooling, async (t) => {
   const directory = await startupDirectory(t);
@@ -903,7 +909,11 @@ test("values the chart refuses are settings the API also refuses", tooling, asyn
         name,
       );
     }
-    assert.equal(await startupCode(directory, environment), "STARTUP_FAILED", name);
+    assert.equal(
+      await startupCode(directory, environment),
+      startupCodes.get(name) ?? "STARTUP_FAILED",
+      name,
+    );
   });
 });
 

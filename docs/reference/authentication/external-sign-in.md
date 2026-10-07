@@ -10,8 +10,9 @@ covers bootstrap, password sessions, request origin, provisioning, and failures.
 GitHub sign-in requires one serving controller, one Installation, PostgreSQL with
 its restricted application role, native IAM, one GitHub App on github.com, and one
 canonical HTTPS Console origin with host-only cookies. Shared-cookie native
-administration, other session readers, rolling or mixed-version serving, and
-mutable Installation policy are unsupported. Keep bootstrap, seeding, external
+administration (startup fails with `EXTERNAL_SIGN_IN_NATIVE_ADMIN_UNSUPPORTED`),
+other session readers, rolling or mixed-version serving, and mutable Installation
+policy are unsupported. Keep bootstrap, seeding, external
 policy writers, and recovery-affecting changes stopped.
 Native IAM's policy read remains separate from State's actor guard. Loopback
 development does not qualify deployed HTTPS.
