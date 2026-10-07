@@ -5,7 +5,8 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
     AND jsonb_typeof(binding->'method') = 'string'
     AND CASE
       WHEN binding->>'method' = 'runtime' THEN binding = '{"method":"runtime"}'::jsonb
-      WHEN binding->>'method' IN ('api_key', 'codex_pat', 'oauth') THEN
+      WHEN binding->>'method' IN ('api_key', 'codex_pat', 'oauth')
+        AND binding #>> '{source,kind}' = 'secret' THEN
         (binding ?& ARRAY['method', 'source'])
         AND (binding - 'method' - 'source' - CASE WHEN resolved THEN 'secretDriverId' ELSE 'method' END) = '{}'::jsonb
         AND jsonb_typeof(binding->'source') = 'object'
@@ -15,12 +16,17 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
         AND binding #>> '{source,namespaceId}' = owner_namespace
         AND (binding #>> '{source,id}') ~ '^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
         AND (NOT resolved OR (jsonb_typeof(binding->'secretDriverId') = 'string' AND btrim(binding->>'secretDriverId') <> ''))
-      WHEN binding->>'method' = 'chatgpt_service_account' THEN
-        (binding ?& ARRAY['method', 'serviceAccountId'])
-        AND (binding - 'method' - 'serviceAccountId'
+      WHEN binding->>'method' = 'codex_pat' THEN
+        (binding ?& ARRAY['method', 'source'])
+        AND (binding - 'method' - 'source'
           - CASE WHEN resolved THEN 'credential' ELSE 'method' END
           - CASE WHEN resolved THEN 'backendBinding' ELSE 'method' END) = '{}'::jsonb
-        AND (binding->>'serviceAccountId') ~ '^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+        AND jsonb_typeof(binding->'source') = 'object'
+        AND ((binding->'source') ?& ARRAY['kind', 'namespaceId', 'id'])
+        AND ((binding->'source') - 'kind' - 'namespaceId' - 'id') = '{}'::jsonb
+        AND binding #>> '{source,kind}' = 'service_account'
+        AND binding #>> '{source,namespaceId}' = owner_namespace
+        AND (binding #>> '{source,id}') ~ '^sa_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
         AND (NOT resolved OR (
           jsonb_typeof(binding->'credential') = 'object'
           AND ((binding->'credential') ?& ARRAY['kind', 'secretRef'])
@@ -58,8 +64,46 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
           AND jsonb_typeof(binding->'sourceType') = 'string'
           AND (binding->>'sourceType') ~ '^[a-z][a-z0-9-]{0,63}$'
           AND jsonb_typeof(binding->'loginMode') = 'string'
-          AND binding->>'loginMode' IN ('api_key', 'chatgptAuthTokens')
+          AND binding->>'loginMode' = 'api_key'
         ELSE (binding - 'method' - 'sourceId') = '{}'::jsonb END
       ELSE false
     END, false);
 $$;
+--> statement-breakpoint
+-- Retired managed PAT bindings are unsupported development state.
+-- Reject them before replacing ownership columns rather than leaving invalid retained state.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM occ.agents
+    WHERE harness_auth IS NOT NULL
+      AND NOT occ.harness_auth_is_valid(harness_auth, namespace_id, false)
+  ) OR EXISTS (
+    SELECT 1 FROM occ.agent_revisions
+    WHERE NOT occ.harness_auth_is_valid(admitted_spec->'harness_auth', namespace_id, true)
+  ) OR EXISTS (
+    SELECT 1 FROM occ.agent_provisioning_work
+    WHERE plan->'harnessAuth' IS NOT NULL AND plan->'harnessAuth' <> 'null'::jsonb
+      AND NOT occ.harness_auth_is_valid(plan->'harnessAuth', namespace_id, false)
+  ) THEN
+    RAISE EXCEPTION 'Unsupported legacy managed PAT authentication: recreate development Agents, revisions, and provisioning requests before migrating'
+      USING ERRCODE = '23514';
+  END IF;
+END;
+$$;
+--> statement-breakpoint
+ALTER TABLE occ.agents
+  DROP CONSTRAINT agents_harness_auth_secret_owner,
+  DROP CONSTRAINT agents_harness_auth_service_account_owner,
+  DROP COLUMN harness_auth_secret_id,
+  DROP COLUMN harness_auth_service_account_id,
+  ADD COLUMN harness_auth_secret_id text GENERATED ALWAYS AS (
+    CASE WHEN harness_auth #>> '{source,kind}' = 'secret' THEN harness_auth #>> '{source,id}' END
+  ) STORED,
+  ADD COLUMN harness_auth_service_account_id text GENERATED ALWAYS AS (
+    CASE WHEN harness_auth #>> '{source,kind}' = 'service_account' THEN harness_auth #>> '{source,id}' END
+  ) STORED,
+  ADD CONSTRAINT agents_harness_auth_secret_owner FOREIGN KEY (namespace_id, harness_auth_secret_id)
+    REFERENCES occ.secrets(namespace_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  ADD CONSTRAINT agents_harness_auth_service_account_owner FOREIGN KEY (namespace_id, harness_auth_service_account_id)
+    REFERENCES occ.service_accounts(namespace_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT;

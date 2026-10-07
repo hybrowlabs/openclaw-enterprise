@@ -254,6 +254,7 @@ export function createWorkerRevisionFixtures(testFile) {
       }
       if (
         (harnessAuth.method === "api_key" || harnessAuth.method === "codex_pat") &&
+        harnessAuth.source.kind === "secret" &&
         grantHarnessSecret
       ) {
         await observerPool.query(

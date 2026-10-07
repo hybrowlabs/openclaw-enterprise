@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-10-03
-last_updated_session: 01a0fe72-58b2-7cc3-b770-7310f5401deb
+updated: 2026-10-07
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Harness Execution Topology Flow
@@ -100,7 +100,7 @@ validation. See the [SSH flow](pr-24-ssh-compute.md).
 Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
 source. It projects the OCC Secret key only into embedded OpenClaw or a dedicated
 Harness. Canonical sources live in the tenant storage target; Compute delivers selected fields into an
-exact revision-owned Harness Secret, including the account token/workspace for ChatGPT.
+exact revision-owned Harness Secret, including the account token for ChatGPT.
 Dedicated gateways receive neither model source. This namespace-local delivery
 also applies to fixture images without native runtime configuration; only the
 native dedicated transport token depends on that configuration.
@@ -312,6 +312,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 
 - 2026-10-03 16:02: Run configured development API and worker Compute preflight before admitting work. (01a0fe72-58b2-7cc3-b770-7310f5401deb - c04093189f2ba6240f8dc431847c2f487afd11de)
 

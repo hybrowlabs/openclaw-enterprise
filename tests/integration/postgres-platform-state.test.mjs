@@ -862,7 +862,7 @@ test(
           method: "codex_pat",
           source: {
             kind: "service_account",
-            namespaceId: fixture.serviceAccount.namespaceId,
+            namespaceId: fixture.namespace.id,
             id: fixture.serviceAccount.id,
           },
         },

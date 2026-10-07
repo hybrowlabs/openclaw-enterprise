@@ -1625,7 +1625,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
-      [48, "preExternalChatgptAuth"],
+      [48, "preCodexPatSources"],
       [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(`populated canonical ${history}`, async (child) => {
@@ -1656,11 +1656,11 @@ test(
 );
 
 test(
-  "External ChatGPT migration admits source snapshots without admitting credential values",
+  "External ChatGPT migration rejects retired OAuth state and admits only source metadata",
   requiresHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
-    const db = await historyDatabase(context, fixture, "externalchatgpt", { prefix: 48 });
+    const db = await historyDatabase(context, fixture, "externalchatgpt", { prefix: 49 });
     const namespaceId = await seedCanonicalData(db);
     const sourceId = `cs_${randomUUID()}`;
     await db.app.query(
@@ -1691,10 +1691,40 @@ test(
 
     // Exercise the actual old CHECK constraint first, not the application validator.
     await assert.rejects(insertSnapshot(binding), invalidSnapshot);
+    const secretId = `sec_${randomUUID()}`;
+    await db.app.query(
+      `INSERT INTO occ.secrets(id,namespace_id,name,driver_id,backend_namespace_name,backend_name,backend_key,backend_uid,created_at)
+       VALUES($1,$2,'Legacy OAuth','secrets','fixture','oauth-source','value','fixture-uid',now())`,
+      [secretId, namespaceId],
+    );
+    const legacyBinding = {
+      method: "oauth",
+      source: { kind: "secret", namespaceId, id: secretId },
+    };
+    await db.app.query("UPDATE occ.agents SET harness_auth=$2::jsonb WHERE namespace_id=$1", [
+      namespaceId,
+      JSON.stringify(legacyBinding),
+    ]);
+    // A preexisting native OAuth binding blocks the new grammar atomically; the
+    // migration cannot silently relabel a Secret as a gateway-owned connection.
+    const beforeRefusal = await historySnapshot(db);
+    assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
+    assert.deepEqual(await historySnapshot(db), beforeRefusal);
+    assert.deepEqual(
+      (
+        await db.app.query("SELECT harness_auth FROM occ.agents WHERE namespace_id=$1", [
+          namespaceId,
+        ])
+      ).rows,
+      [{ harness_auth: legacyBinding }],
+    );
+    await db.app.query("UPDATE occ.agents SET harness_auth=NULL WHERE namespace_id=$1", [
+      namespaceId,
+    ]);
     const receipts = await historyReceipts(db.migrator);
     assert.deepEqual(await runHistoryMigration(db), {
       ok: true,
-      history: "preExternalChatgptAuth",
+      history: "preCanonicalHarnessAuth",
     });
     await assertCompletedHistory(db, receipts);
     assert.deepEqual((await insertSnapshot(binding)).rows, [{ auth: binding }]);
@@ -1779,7 +1809,7 @@ test(
 );
 
 test(
-  "Provider migration preserves fingerprints and rejects retired Harness authentication",
+  "Provider migration preserves fingerprints and rejects retired managed PAT bindings",
   requiresHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
@@ -1793,8 +1823,8 @@ test(
       history: "providerCompleted",
     });
     // Preserve the historical terminology migration proof through its supported auth shape.
-    // The final canonical-auth migration must then refuse these retired credentials atomically.
-    await installCanonicalPrefix(db, 49);
+    // The canonical PAT-source migration must then refuse the retired binding atomically.
+    await installCanonicalPrefix(db, 48);
     assert.deepEqual((await historyReceipts(db.migrator)).slice(0, receipts.length), receipts);
     assert.deepEqual(
       (
@@ -1904,7 +1934,7 @@ test(
     );
     assert.deepEqual(await runHistoryMigration(db, "production", true), {
       ok: true,
-      history: "preCanonicalHarnessAuth",
+      history: "preCodexPatSources",
     });
     const beforeRefusal = await historySnapshot(db);
     assert.deepEqual(await runHistoryMigration(db, "production"), {
@@ -1937,7 +1967,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
-      [48, "preExternalChatgptAuth"],
+      [48, "preCodexPatSources"],
       [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(history, async (child) => {
@@ -2014,8 +2044,8 @@ test(
       [44, "preBrokerReceiptFence"],
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
-      [47, "preAdministratorCredentialSourceGrants"],
-      [48, "preExternalChatgptAuth"],
+      // Prefix 47 is omitted: 0048 only updates rows, so it has no DDL for the trigger to abort.
+      [48, "preCodexPatSources"],
       [49, "preCanonicalHarnessAuth"],
     ]) {
       void context.test(`prefix ${prefix} transaction`, async (child) => {
@@ -2031,7 +2061,7 @@ test(
           db,
           db.name,
           `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
-        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 47 ? "CREATE FUNCTION" : prefix >= 41 ? "ALTER TABLE" : prefix >= 38 ? "CREATE FUNCTION" : prefix >= 36 ? "CREATE INDEX" : prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
+        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 49 ? "CREATE FUNCTION" : prefix >= 41 ? "ALTER TABLE" : prefix >= 38 ? "CREATE FUNCTION" : prefix >= 36 ? "CREATE INDEX" : prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
         );
         assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
         assert.deepEqual(await historyReceipts(db.migrator), before.receipts);

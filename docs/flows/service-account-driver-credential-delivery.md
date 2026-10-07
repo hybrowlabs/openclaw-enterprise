@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-10-07
-last_updated_session: authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Service Account Driver Credential Delivery Flow
@@ -196,9 +196,7 @@ Refresh, rotation, and automated reconciliation remain deferred.
 
 ## Changelog
 
-- 2026-10-07 17:35: Select managed accounts through a typed `codex_pat` source while preserving account permissions, Backend ownership, and native token login. (authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f - da984340ae4aafb03bb0c66bfd94ba40252625a5)
-
-- 2026-10-07 16:52: Use the shared Codex token login without a runtime workspace override; retain control-plane ownership checks. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 
 - 2026-10-05 20:51: Trace rejected Backend HTTP response disposal and native HTTPS recovery coverage. (c0a8f27c-4c0f-42ed-b6e8-be41aff648c7 - b5b3ba296f38dd5090c1f4bb1287ed87ae3f9eba)
 

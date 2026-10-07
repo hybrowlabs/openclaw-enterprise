@@ -21,14 +21,8 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const scenario = fs.readFileSync("/fixture/scenario", "utf8");
 fs.appendFileSync("/home/node/calls", JSON.stringify(args) + "\n");
-if (scenario === "service-account") {
-  assert.equal(process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
-  assert.equal(args.some((arg) => arg.startsWith("forced_chatgpt_workspace_id=")), false);
-  if (args.includes("login")) {
-    assert.deepEqual(args, ["-c", "cli_auth_credentials_store=file", "login", "--with-access-token"]);
-    assert.equal(fs.readFileSync(0, "utf8"), "at-service-account-fixture");
-  }
-}
+assert.equal(process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
+assert.equal(args.some((argument) => argument.includes("forced_chatgpt_workspace_id")), false);
 if (scenario === "external") {
   // Inspect the actual launcher's output at both native process boundaries.
   assert.equal(args.includes("login"), false);
@@ -54,7 +48,9 @@ if (scenario === "external") {
 }
 if (args.includes("login")) {
   assert.equal(Object.hasOwn(process.env, "APP_SERVER_TOKEN"), false);
-  process.stdin.resume();
+  const pat = scenario === "pat";
+  assert.deepEqual(args, ["-c", "cli_auth_credentials_store=file", "login", pat ? "--with-access-token" : "--with-api-key"]);
+  assert.equal(fs.readFileSync(0, "utf8"), pat ? "at-service-account-fixture" : "credential-canary");
 } else if (args.includes("exec")) {
   assert.equal(process.env.OPENAI_API_KEY, undefined);
   assert.equal(process.env.CODEX_ACCESS_TOKEN, undefined);
@@ -231,9 +227,10 @@ test(
   },
   async (t) => {
     assert.match(image, /^(?:sha256:[a-f0-9]{64}|.+@sha256:[a-f0-9]{64})$/);
-    // Compute normalizes pasted and backend-issued tokens to this native login.
+    // Both imported and managed PATs reach this receiver; Compute tests verify
+    // their distinct source ownership before selecting the same native login.
     await t.test("service-account token", async (t) => {
-      const launcher = await startLauncher(t, "service-account", false, {
+      const launcher = await startLauncher(t, "pat", false, {
         CODEX_LOGIN_MODE: "codex_pat",
         CODEX_ACCESS_TOKEN: "at-service-account-fixture",
       });
@@ -244,6 +241,12 @@ test(
       assert.ok(snapshot.calls[0].includes("login"));
       assert.ok(snapshot.calls[1].includes("exec"));
       assert.ok(snapshot.calls[2].includes("app-server"));
+      assert.equal(snapshot.status.runtimeFailure, undefined);
+      assert.deepEqual(snapshot.probeDirectories, []);
+      assert.doesNotMatch(
+        launcher.output() + launcher.errors(),
+        /at-service-account-fixture|transport-canary/,
+      );
     });
 
     const auth = {

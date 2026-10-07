@@ -283,6 +283,8 @@ an external OAuth Driver and service; the bundled catalog offers API keys only.
 
 ## Changelog
 
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
+
 - 2026-10-07 17:36: Replace runtime-owned OAuth custody with source-owned device login and warm discovery; unify PAT sources. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - da984340ae4aafb03bb0c66bfd94ba40252625a5)
 
 - 2026-10-07 16:53: Normalize managed and supplied service-account credentials to token-only Codex login while preserving control-plane workspace ownership. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - daeb19dfb3aef5f083a73f25674bced40986f8d1)

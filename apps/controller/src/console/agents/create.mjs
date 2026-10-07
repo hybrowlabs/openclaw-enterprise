@@ -1784,7 +1784,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         savedSecret ??
         modelCredentialSecret ??
         presetExistingSecret ??
-        (hasBoundModelCredential ? binding.source : undefined);
+        (hasBoundModelCredential && binding.source.kind === "secret" ? binding.source : undefined);
       if (body.harnessAuth?.method === "credential_source") {
         await ensureCredentialOperateBinding(context, savedAgent, {
           kind: "credential_source",

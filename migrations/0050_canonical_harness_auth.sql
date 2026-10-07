@@ -70,8 +70,8 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
     END, false);
 $$;
 --> statement-breakpoint
--- Retired authentication bindings are unsupported development state.
--- Reject them before replacing ownership columns rather than leaving invalid retained state.
+-- Retired OAuth Secret bindings are unsupported development state.
+-- Reject them before accepting the external credential-source mode.
 DO $$
 BEGIN
   IF EXISTS (
@@ -86,24 +86,8 @@ BEGIN
     WHERE plan->'harnessAuth' IS NOT NULL AND plan->'harnessAuth' <> 'null'::jsonb
       AND NOT occ.harness_auth_is_valid(plan->'harnessAuth', namespace_id, false)
   ) THEN
-    RAISE EXCEPTION 'Unsupported legacy Harness authentication: recreate development Agents, revisions, and provisioning requests before migrating'
+    RAISE EXCEPTION 'Unsupported legacy OAuth authentication: recreate development Agents, revisions, and provisioning requests before migrating'
       USING ERRCODE = '23514';
   END IF;
 END;
 $$;
---> statement-breakpoint
-ALTER TABLE occ.agents
-  DROP CONSTRAINT agents_harness_auth_secret_owner,
-  DROP CONSTRAINT agents_harness_auth_service_account_owner,
-  DROP COLUMN harness_auth_secret_id,
-  DROP COLUMN harness_auth_service_account_id,
-  ADD COLUMN harness_auth_secret_id text GENERATED ALWAYS AS (
-    CASE WHEN harness_auth #>> '{source,kind}' = 'secret' THEN harness_auth #>> '{source,id}' END
-  ) STORED,
-  ADD COLUMN harness_auth_service_account_id text GENERATED ALWAYS AS (
-    CASE WHEN harness_auth #>> '{source,kind}' = 'service_account' THEN harness_auth #>> '{source,id}' END
-  ) STORED,
-  ADD CONSTRAINT agents_harness_auth_secret_owner FOREIGN KEY (namespace_id, harness_auth_secret_id)
-    REFERENCES occ.secrets(namespace_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-  ADD CONSTRAINT agents_harness_auth_service_account_owner FOREIGN KEY (namespace_id, harness_auth_service_account_id)
-    REFERENCES occ.service_accounts(namespace_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT;

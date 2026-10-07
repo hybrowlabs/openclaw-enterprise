@@ -390,9 +390,9 @@
       "idx": 48,
       "version": "7",
       "when": 1787000000049,
-      "tag": "0049_external_chatgpt_harness_auth",
+      "tag": "0049_codex_pat_sources",
       "breakpoints": true,
-      "sha256": "4179490df2c232e82f58462096e5264343d39f1c14191575340759796606bb21"
+      "sha256": "65be2e50162c6fd38ef03c2be00aa58feff5e762afdd408a4385ed078cf1adc5"
     },
     {
       "idx": 49,
@@ -400,7 +400,7 @@
       "when": 1787000000050,
       "tag": "0050_canonical_harness_auth",
       "breakpoints": true,
-      "sha256": "12dfd311c3d3691a972c8db003d89150eb042978d4750f5652be2ea51fae462b"
+      "sha256": "3b16bed29627533127d9ac3c6d62446b28baae5e70d9b4c9d64a4affbbe9910b"
     }
   ],
   "initialSchemaStates": {
@@ -414,8 +414,18 @@
     "ownerOnly": {
       "owner": "occ_migrator",
       "privileges": [
-        ["occ_migrator", "occ_migrator", "CREATE", false],
-        ["occ_migrator", "occ_migrator", "USAGE", false]
+        [
+          "occ_migrator",
+          "occ_migrator",
+          "CREATE",
+          false
+        ],
+        [
+          "occ_migrator",
+          "occ_migrator",
+          "USAGE",
+          false
+        ]
       ],
       "objects": 0,
       "defaultPrivileges": 0,
@@ -449,8 +459,8 @@
     "preModelProbeFailureCause": "038d68892adeb6cf41001617b9ec55ca8a32115c04cfa487f0674b3756294bc2",
     "preProvisioningConfigurationRelease": "3db47081c1e1f671c51aff211ae1fe560dfffe1f80b2176d16b76838cf8f3b30",
     "preAdministratorCredentialSourceGrants": "dcd129084c45ee23fadbbad0fc97b2f6ee38ff12421760f863d1d3e1f5eb4516",
-    "preExternalChatgptAuth": "dcd129084c45ee23fadbbad0fc97b2f6ee38ff12421760f863d1d3e1f5eb4516",
-    "preCanonicalHarnessAuth": "736c1be86fd2d22f6f0cbed7256921a74ef9b997d3af22f55982782e76d816e4"
+    "preCodexPatSources": "dcd129084c45ee23fadbbad0fc97b2f6ee38ff12421760f863d1d3e1f5eb4516",
+    "preCanonicalHarnessAuth": "1637119b545b917f59933031730a2ad32ba8f47435b3526f179a840e4285ea6f"
   },
   "ledgerCatalogs": {
     "initialized": "62946da6b1fc2b06df09e97dda4cf1831f170a2f3d5ff35a9f107af206c425dc",

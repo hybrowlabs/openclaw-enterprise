@@ -1069,8 +1069,8 @@ function rejectCrossNamespaceSecretSources(
   secretBindings: SecretBindings | undefined,
   harnessAuth: HarnessAuthBinding | null | undefined,
 ): void {
-  const sources: ResourceRef[] = Object.values(secretBindings ?? {}).map(({ source }) => source);
-  if (harnessAuth !== undefined && harnessAuth !== null && "source" in harnessAuth) {
+  const sources = Object.values(secretBindings ?? {}).map(({ source }) => source);
+  if (isSecretHarnessAuth(harnessAuth)) {
     sources.push(harnessAuth.source);
   }
   if (sources.some((source) => source.namespaceId !== namespaceId)) {

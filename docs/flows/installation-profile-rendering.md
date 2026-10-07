@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
 updated: 2026-10-07
-last_updated_session: authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Installation Profile Rendering Flow
@@ -194,7 +194,7 @@ activation, and repository registry creation need separate evidence.
 
 ## Changelog
 
-- 2026-10-07 17:35: Name managed ServiceAccounts as a `codex_pat` credential source in rendered preflight guidance. (authoring-run/3f33b41d-b7bf-41b5-969c-2a0208cd6e8f - da984340ae4aafb03bb0c66bfd94ba40252625a5)
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 
 - 2026-10-07: Refuse a public-suffix shared cookie domain in preflight.
 - 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.

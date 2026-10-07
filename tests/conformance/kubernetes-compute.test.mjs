@@ -63,8 +63,7 @@ const apiKeyAuth = {
 function authContext(revision, namespace = kubernetesNamespaceName(tenant.id)) {
   return {
     harnessAuth:
-      revision.harnessAuth.method === "api_key" ||
-      (revision.harnessAuth.method === "codex_pat" && revision.harnessAuth.source.kind === "secret")
+      revision.harnessAuth.source?.kind === "secret"
         ? {
             ...revision.harnessAuth,
             backendRef: {
@@ -4323,7 +4322,7 @@ test("account-owned Kubernetes Secrets reject invalid or foreign credentials bef
   }
 });
 
-test("dedicated Codex uses the same token login for an account-owned credential without a workspace override", () => {
+test("dedicated Codex projects the account-owned token through the common PAT login", () => {
   const driver = createKubernetesComputeDriver(
     options({
       runtime: {
@@ -4370,7 +4369,7 @@ test("dedicated Codex uses the same token login for an account-owned credential 
     workload.spec.template.spec.containers[0].env.map((entry) => [entry.name, entry]),
   );
 
-  // Account ownership stays in the control plane; native login needs only its token.
+  // Account tokens use the same native PAT login; workspace ownership stays in the control plane.
   assert.deepEqual(agentEnvironment.CODEX_ACCESS_TOKEN.valueFrom.secretKeyRef, {
     name: secretName,
     key: "token",
@@ -4415,6 +4414,47 @@ test("dedicated Codex uses the same token login for an account-owned credential 
   assert.equal(gatewayEnvironment.has("SLACK_APP_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("SLACK_BOT_TOKEN"), false);
   assert.equal(gatewayEnvironment.has("MSTEAMS_APP_PASSWORD"), false);
+});
+
+test("managed PAT preparation projects the account-owned token and rejects a changed owner", async () => {
+  const { driver, revision, namespace, context, objects, records } = workspaceSetupFixture(false);
+  const serviceAccountId = "sa_00000000-0000-4000-8000-000000000001";
+  const secretRef = await driver.storeServiceAccountCredential({
+    namespaceId: tenant.id,
+    serviceAccountId,
+    accessToken: "at-managed-fixture",
+  });
+  revision.harnessAuth = {
+    method: "codex_pat",
+    source: { kind: "service_account", namespaceId: tenant.id, id: serviceAccountId },
+    credential: { kind: "access_token", secretRef },
+    backendBinding: {
+      backendId: "provider-chatgpt",
+      driverId: "chatgpt",
+      workspaceId: "ws_1",
+      credentialIssued: true,
+    },
+  };
+  context.harnessAuth = revision.harnessAuth;
+  await driver.prepareRevision(revision, context);
+  const source = objects.get(`Secret:${namespace}:${secretRef.name}`);
+  const material = [...objects.values()].find(
+    ({ kind, metadata }) => kind === "Secret" && metadata.name.startsWith("harness-secrets-"),
+  );
+  assert.equal(material.data.CODEX_ACCESS_TOKEN, source.data.token);
+  assert.deepEqual(Object.keys(material.data).sort(), ["CODEX_ACCESS_TOKEN", "app-server-token"]);
+
+  // Sharing the PAT login mode must retain the managed source's account ownership fence.
+  source.metadata.annotations["openclaw.dev/service-account-id"] = "another-account";
+  const before = records.length;
+  await assert.rejects(
+    driver.prepareRevision(revision, context),
+    /Refusing unowned Kubernetes Secret/,
+  );
+  assert.equal(
+    records.slice(before).some(({ kind }) => kind === "Deployment"),
+    false,
+  );
 });
 
 test("direct service account token is confined to the model container and exact admitted Secret", () => {
