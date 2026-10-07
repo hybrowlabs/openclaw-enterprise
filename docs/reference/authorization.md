@@ -330,8 +330,8 @@ the revision snapshots and returns that snapshot, so the grant reveals nothing
 new. Other readers of the Agent, such as a Console sharee, still need their own
 revision grants. Administrators can delete the binding; Agent deletion removes
 it with the revision. The skip reasons are `already-readable`,
-`subject-not-bindable` (an Installation-scoped ServicePrincipal cannot hold a
-Namespace binding) and `external-iam-policy` (the IAM Driver keeps policy
+`subject-not-bindable` (not a valid Namespace binding subject, such as an
+Installation-scoped ServicePrincipal) and `external-iam-policy` (the IAM Driver keeps policy
 outside platform State).
 
 [Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two

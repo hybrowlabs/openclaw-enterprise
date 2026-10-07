@@ -684,22 +684,27 @@ export interface DeployAgentAuthorization {
 /**
  * Why deploy admission wrote no revision-read grant for its caller: the caller can already
  * read the revision, the selected IAM Driver keeps policy outside platform State, or the
- * caller cannot hold a Namespace binding (an Installation-scoped ServicePrincipal).
+ * caller is not a valid Namespace binding subject (for example an Installation-scoped
+ * ServicePrincipal).
  */
 export type DeployerRevisionReadSkip =
   "already-readable" | "external-iam-policy" | "subject-not-bindable";
 
-export interface DeployerRevisionReadGrant {
-  /** The deployer's read grant on the admitted revision, when admission wrote one. */
-  readonly grantedAccessBindings: readonly RemovedAccessBinding[];
-  /** Set exactly when `grantedAccessBindings` is empty. */
-  readonly revisionReadGrantSkipped?: DeployerRevisionReadSkip;
-}
+/** The deployer's read grant on the admitted revision, or why admission wrote none. */
+export type DeployerRevisionReadGrant =
+  | {
+      readonly grantedAccessBindings: readonly [RemovedAccessBinding];
+      readonly revisionReadGrantSkipped?: undefined;
+    }
+  | {
+      readonly grantedAccessBindings: readonly [];
+      readonly revisionReadGrantSkipped: DeployerRevisionReadSkip;
+    };
 
-export interface AuthorizedAgentDeployment extends DeployerRevisionReadGrant {
+export type AuthorizedAgentDeployment = DeployerRevisionReadGrant & {
   readonly revision: Readonly<AgentRevision>;
   readonly authorization: Readonly<DeployAgentAuthorization>;
-}
+};
 
 /**
  * Audit details for the deployer's revision-read grant, shared by the deploy event and the
@@ -708,7 +713,7 @@ export interface AuthorizedAgentDeployment extends DeployerRevisionReadGrant {
 export function deployerRevisionReadAuditDetails(
   grant: Readonly<DeployerRevisionReadGrant>,
 ): Readonly<Record<string, unknown>> {
-  return grant.grantedAccessBindings.length > 0
+  return grant.revisionReadGrantSkipped === undefined
     ? { grantedAccessBindings: grant.grantedAccessBindings }
     : { revisionReadGrantSkipped: grant.revisionReadGrantSkipped };
 }
@@ -7817,7 +7822,10 @@ export class OpenClawController {
     revision: Readonly<AgentRevision>,
   ): Promise<Readonly<DeployerRevisionReadGrant>> {
     const skipped = (revisionReadGrantSkipped: DeployerRevisionReadSkip) =>
-      Object.freeze({ grantedAccessBindings: Object.freeze([]), revisionReadGrantSkipped });
+      Object.freeze({
+        grantedAccessBindings: Object.freeze([] as const),
+        revisionReadGrantSkipped,
+      });
     const target = {
       kind: "agent_revision",
       id: revision.id,
@@ -7883,8 +7891,10 @@ export class OpenClawController {
         ),
       );
     } catch (error) {
-      // Only an Installation-scoped ServicePrincipal can deploy here without being a valid
-      // Namespace binding subject; it keeps the access it has, as before this grant existed.
+      // A caller that can deploy but is not a valid Namespace binding subject (for example an
+      // Installation-scoped ServicePrincipal) keeps the access it has, as before this grant
+      // existed. Both IAM Drivers raise /subjectId only from that subject check; a new
+      // /subjectId cause would be reported as subject-not-bindable here.
       if (error instanceof IAMPolicyValidationError && error.path === "/subjectId") {
         if (existingRole === undefined) {
           // Leave no unreferenced Role behind for a grant that was not written.
@@ -7897,7 +7907,7 @@ export class OpenClawController {
       throw error;
     }
     return Object.freeze({
-      grantedAccessBindings: Object.freeze([accessBindingAuditRecord(binding)]),
+      grantedAccessBindings: Object.freeze([accessBindingAuditRecord(binding)] as const),
     });
   }
 
