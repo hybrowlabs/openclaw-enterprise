@@ -1276,8 +1276,12 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     channelEditor.replaceChildren(...[channels, modeWarning].filter(Boolean));
     updateControls();
   }
+  // TODO: Credential sources use the supported create-then-deploy path until guided
+  // provisioning can admit their source and Agent operate grant.
   const shouldProvision = () =>
-    mode.value === "dedicated" && provisionableExecutionModes.has(mode.value);
+    (binding?.method ?? authMethod.value) !== "credential_source" &&
+    mode.value === "dedicated" &&
+    provisionableExecutionModes.has(mode.value);
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     const planLocked =

@@ -16,9 +16,14 @@ import {
 } from "./console-agents-browser-helpers.mjs";
 
 test("Codex OAuth console saves a credential source and reuses it for plugin editing", async (t) => {
-  const fixture = await createConsoleAppFixture(t, { provisionedPeople: [] });
+  const fixture = await createConsoleAppFixture(t, {
+    provisionedPeople: [],
+    agentProvisioning: true,
+  });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("OAuth console", { ready: true });
+  const installation = await fixture.request("GET", "/installation");
+  assert.deepEqual(installation.data.capabilities.agentProvisioning.executionModes, ["dedicated"]);
   const driver = new CodexPluginDriver();
   fixture.controller.registerDriver(driver);
   fixture.controller.selectDriver("plugin", driver.id);
@@ -123,6 +128,14 @@ test("Codex OAuth console saves a credential source and reuses it for plugin edi
   await page.getByRole("heading", { name: "OAuth Agent", exact: true }).waitFor();
   const creation = requests.find(
     (request) => request.method === "POST" && request.path === `/namespaces/${namespace.id}/agents`,
+  );
+  // Even when dedicated provisioning is advertised, source auth uses the supported
+  // draft creation path. The durable provisioning API rejects source auth.
+  assert.equal(
+    requests.some(
+      (request) => request.method === "POST" && request.path.endsWith("/agents/provision"),
+    ),
+    false,
   );
   assert.deepEqual(creation.body.harnessAuth, {
     method: "credential_source",

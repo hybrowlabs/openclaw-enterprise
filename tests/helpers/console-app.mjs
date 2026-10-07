@@ -39,6 +39,7 @@ export const backendFixtures = Object.freeze([
 function computeDriver({
   repositoryCredentials = false,
   discoverHarnessModels = async () => [],
+  agentProvisioning = false,
   sandboxDriver,
   credentialGatewayDriver,
 } = {}) {
@@ -50,8 +51,9 @@ function computeDriver({
 
   return Object.assign(driver, {
     implementation: "test-memory-lifecycle",
-    // In-memory State has no durable provisioning queue; this fixture supports draft creation.
-    agentProvisioning: undefined,
+    // Most Console cases use drafts. Branch-selection tests can retain the actual
+    // Compute capability while verifying that their flow avoids the durable queue.
+    ...(agentProvisioning ? {} : { agentProvisioning: undefined }),
     // Catalog data is the external Compute boundary; Console/OCC/IAM routes remain real.
     discoverHarnessModels,
     async ensureNamespace(namespace) {
@@ -235,6 +237,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       computeDriver({
         repositoryCredentials: options.repositoryCredentials === true,
         discoverHarnessModels: options.discoverHarnessModels,
+        agentProvisioning: options.agentProvisioning,
         sandboxDriver: options.sandboxDriver,
         credentialGatewayDriver: options.credentialGatewayDriver,
       }),
