@@ -1635,6 +1635,7 @@ export async function resolveKubernetesNamespace(
 /**
  * `legacyCandidate`: the tenant namespace exists without the canonical storage label, as
  * tenants created before the shared layout do. Only those can have a legacy Gateway namespace.
+ * `absent`: no tenant namespace exists; a legacy Gateway namespace may still hold its state.
  */
 async function discoverKubernetesNamespace(
   client: CoreV1Api,
@@ -1643,6 +1644,7 @@ async function discoverKubernetesNamespace(
   readonly name: string;
   readonly external: boolean;
   readonly legacyCandidate: boolean;
+  readonly absent: boolean;
 }> {
   const observed = await client.listNamespace({
     labelSelector: `openclaw.dev/namespace=${namespaceId}`,
@@ -1655,7 +1657,12 @@ async function discoverKubernetesNamespace(
     throw new OwnershipFailure(`Multiple Kubernetes namespaces claim tenant ${namespaceId}.`);
   }
   if (observed.items.length === 0) {
-    return { name: kubernetesNamespaceName(namespaceId), external: false, legacyCandidate: false };
+    return {
+      name: kubernetesNamespaceName(namespaceId),
+      external: false,
+      legacyCandidate: false,
+      absent: true,
+    };
   }
   const namespace = observed.items[0];
   const placement = verifiedKubernetesNamespace(namespace?.metadata, namespaceId);
@@ -1668,6 +1675,7 @@ async function discoverKubernetesNamespace(
   return {
     ...placement,
     legacyCandidate: namespace?.metadata?.labels?.["openclaw.dev/gateway-namespace"] === undefined,
+    absent: false,
   };
 }
 
@@ -3507,7 +3515,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const selection = namespace.existingNamespace;
       const placement =
         selection === undefined
-          ? await this.resolveNamespace(namespace.id)
+          ? await this.resolveNamespace(namespace.id, true)
           : { name: this.tenantAddress(selection), external: true };
       const { external: externallyManaged } = placement;
       let name = placement.name;
@@ -6398,16 +6406,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
+  /**
+   * `creating`: the caller would create a missing tenant namespace, so a surviving legacy
+   * Gateway namespace must keep the tenant on the split layout instead of adding a second
+   * canonical storage target.
+   */
   private async resolveNamespace(
     namespaceId: string,
+    creating = false,
   ): Promise<{ readonly name: KubernetesNamespaceAddress; readonly external: boolean }> {
     const clients = await this.clients("execution");
     const resolved = await this.request(() =>
       discoverKubernetesNamespace(clients.core, namespaceId),
     );
-    const legacy = resolved.legacyCandidate
-      ? await this.legacyGatewayNamespace(namespaceId)
-      : undefined;
+    const legacy =
+      resolved.legacyCandidate || (creating && resolved.absent)
+        ? await this.legacyGatewayNamespace(namespaceId)
+        : undefined;
     return {
       name: { ...this.tenantAddress(resolved.name), ...legacy },
       external: resolved.external,

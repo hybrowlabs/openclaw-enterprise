@@ -3191,6 +3191,88 @@ test("a legacy single-cluster tenant keeps its Gateway namespace through ensure 
   assert.equal(fresh.objects.has(`Namespace::${legacyName}`), false);
 });
 
+test("a legacy single-cluster tenant survives a missing tenant namespace, a terminating Gateway namespace and its removal", async () => {
+  const driver = createKubernetesComputeDriver(options());
+  const tenantName = kubernetesNamespaceName(tenant.id);
+  const legacyName = kubernetesGatewayNamespaceName(tenant.id);
+  const tenantNamespace = {
+    ...driver.manifest("v1", "Namespace", tenantName, { namespaceId: tenant.id }),
+    status: { phase: "Active" },
+  };
+  tenantNamespace.metadata.uid = "tenant-uid";
+  const legacyNamespace = {
+    ...driver.gatewayNamespaceManifest({ namespaceId: tenant.id }, true),
+    status: { phase: "Active" },
+  };
+  legacyNamespace.metadata.uid = "legacy-uid";
+  const activeOnPatch = (cluster) => {
+    const patchNamespace = cluster.clients.core.patchNamespace;
+    cluster.clients.core.patchNamespace = async (request) => {
+      const next = await patchNamespace(request);
+      next.status = { phase: "Active" };
+      cluster.objects.set(`Namespace::${request.name}`, structuredClone(next));
+      return next;
+    };
+  };
+  const storageTargets = async (cluster) =>
+    (
+      await cluster.clients.core.listNamespace({
+        labelSelector: `openclaw.dev/gateway-namespace=${tenant.id}`,
+      })
+    ).items.map(({ metadata }) => metadata.name);
+
+  // A missing tenant namespace is recreated without the storage label, so the surviving
+  // legacy namespace remains the only storage target and keeps the Gateway's state.
+  const recreated = namespaceLifecycleCluster([legacyNamespace]);
+  activeOnPatch(recreated);
+  driver.apiClients = Promise.resolve(recreated.clients);
+  assert.deepEqual(await driver.ensureNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceReady: true,
+  });
+  assert.equal(
+    recreated.objects.get(`Namespace::${tenantName}`).metadata.labels[
+      "openclaw.dev/gateway-namespace"
+    ],
+    undefined,
+  );
+  assert.equal(recreated.objects.get(`Namespace::${legacyName}`).metadata.uid, "legacy-uid");
+  assert.deepEqual(await storageTargets(recreated), [legacyName]);
+  assert.equal(
+    recreated.calls.some(([action]) => action === "create"),
+    false,
+  );
+
+  // A terminating legacy namespace is not ready and never moves storage to the tenant.
+  const terminating = namespaceLifecycleCluster([
+    tenantNamespace,
+    {
+      ...legacyNamespace,
+      metadata: { ...legacyNamespace.metadata, deletionTimestamp: "2026-10-07T00:00:00Z" },
+      status: { phase: "Terminating" },
+    },
+  ]);
+  driver.apiClients = Promise.resolve(terminating.clients);
+  assert.equal((await driver.ensureNamespace(tenant)).namespaceReady, false);
+  assert.equal(
+    terminating.objects.get(`Namespace::${tenantName}`).metadata.labels[
+      "openclaw.dev/gateway-namespace"
+    ],
+    undefined,
+  );
+  assert.deepEqual(await storageTargets(terminating), [legacyName]);
+
+  // Once the legacy namespace is gone, the tenant converts to the shared layout.
+  const converted = namespaceLifecycleCluster([tenantNamespace]);
+  driver.apiClients = Promise.resolve(converted.clients);
+  assert.deepEqual(await driver.ensureNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceReady: true,
+  });
+  assert.deepEqual(await storageTargets(converted), [tenantName]);
+  assert.equal(converted.objects.has(`Namespace::${legacyName}`), false);
+});
+
 test("sandbox routing keeps generated HTML off the administrative origin and backend", () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
