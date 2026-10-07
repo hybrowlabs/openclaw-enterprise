@@ -63,7 +63,10 @@ deployment status.
 - The grant is exact, attributable, and visible as ordinary policy: one binding,
   one revision, one subject, in the deploy audit event.
 - It appears and disappears atomically with the revision.
-- A deploy never fails because the grant could not be written.
+- A caller who cannot hold a Namespace binding still deploys, without a grant.
+  Any other failure to write the grant fails the deploy closed, with the
+  revision rolled back, rather than admitting a revision its deployer cannot
+  read.
 
 ## Non-goals
 
@@ -92,8 +95,8 @@ desired state, queues work and, through the API, appends the deploy audit event.
 3. Ensure the Namespace Role `role_<namespaceId>_deployed_revision_read`, named
    "Deployed revision read", with exactly `agent_revision:read`. It is created on
    first use and then reused; Roles are immutable, and a Role with that ID but
-   other permissions is refused with `409`. This follows the provisioning
-   precedent (`role_<namespaceId>_agent_secret_operate`).
+   other permissions is refused with `409` naming the Role. This follows the
+   provisioning precedent (`role_<namespaceId>_agent_secret_operate`).
 4. Create `binding_<revisionId>_deployer_read`: subject the caller, that Role,
    target the new revision. The IAM Driver's ordinary checks apply (subject rule,
    target lock, Namespace lock).
@@ -104,8 +107,9 @@ desired state, queues work and, through the API, appends the deploy audit event.
 **Audit.** The deploy event lists the binding in `details.grantedAccessBindings`,
 with the same fields as `removedAccessBindings` (ID, subject, Role, target). The
 provisioning handoff checkpoint event does the same when provisioning deploys.
-The list is omitted when empty. An audit failure rolls back the grant with the
-revision.
+The list is omitted when no grant was written, whether the caller already read
+the revision or could not hold the binding. An audit failure rolls back the grant
+with the revision.
 
 **Lifecycle.** Revisions are deleted only when their Agent is deleted. The Agent
 deletion finalizer already removes bindings that target the Agent's revisions,
