@@ -41,7 +41,8 @@ A split-layout tenant's Harness namespace lacks the
 `openclaw.dev/gateway-namespace` label; its `oce-gateways-<hash>` namespace has
 that label, the manager label and the Namespace ID annotation, but no tenant
 label. The driver never creates that namespace, refuses one with other labels,
-and deletes both when the tenant is deleted.
+and deletes both when the tenant is deleted. Its dedicated Gateways still require
+`runtime.gatewayNodeSelector`.
 
 ```sh
 kubectl get namespaces -l openclaw.dev/gateway-namespace -L openclaw.dev/namespace

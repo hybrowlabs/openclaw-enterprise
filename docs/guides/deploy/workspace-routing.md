@@ -234,7 +234,7 @@ cutover with its other Agents and preserve unrelated policies and labels.
 
 Select the Gateway's physical Kubernetes namespace, distinct from its OCC
 Namespace ID: the Agent's tenant namespace, or for dedicated execution in the
-two-cluster profile, its `oce-gateways-<hash>` namespace in the control cluster.
+two-cluster profile or a [split-layout tenant](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations), its `oce-gateways-<hash>` namespace.
 The commands below use
 `GATEWAY_NAMESPACE` for that target. This repairs routing on an already placed
 Gateway; it does not migrate a Gateway or move its PVC between namespaces. The following uses the same Gateway name/namespace as the examples

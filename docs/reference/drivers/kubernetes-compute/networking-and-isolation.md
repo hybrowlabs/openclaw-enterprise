@@ -271,7 +271,7 @@ require one owned storage target; adopted targets require restricted Pod Securit
 Discovery excludes OCC's namespace.
 
 Only the experimental two-cluster profile creates `oce-gateways-<hash>` in the
-control cluster, with the first 24 hexadecimal characters of `sha256(namespaceId)`.
+control cluster ([older single-cluster tenants](../kubernetes-compute.md#existing-split-layout-installations) keep theirs), with the first 24 hexadecimal characters of `sha256(namespaceId)`.
 That target has the storage-role label and omits the tenant discovery label.
 
 Compute prepares restricted Pod security, quotas, defaults, default-deny and DNS
