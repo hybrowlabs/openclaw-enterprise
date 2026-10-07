@@ -7,9 +7,8 @@ author: freeqaz
 # Proposal: Check a dedicated replacement before stopping its predecessor
 
 - **ID:** RFC-0019
-- **Owner:** freeqaz (proposal). Compute and worker review: Kubernetes Compute maintainers.
 - **Created:** 2026-10-03
-- **Last updated:** 2026-10-03
+- **Last updated:** 2026-10-07
 - **RFC PR:** [#1045](https://github.com/openclaw/openclaw-enterprise/pull/1045)
 - **Related:** [Dedicated Harness RWO workspace plan](../plans/38-harness-rwo-workspace-plan.md);
   [exclusive replacement contract](../../docs/reference/drivers/compute.md#production-revision-stages);
@@ -88,12 +87,39 @@ Split exclusive preparation into two stages around the predecessor stop:
    - run the existing startup model check from a short-lived probe Pod that
      receives only the replacement's model credential and no workspace or
      Gateway state, under the same NetworkPolicy as the Harness.
-     A failure here records the revision as failed with the existing failure
-     codes. The predecessor is not touched, and the console's existing "Probably
-     down" state does not apply because the active revision still runs.
+
+   A failure here records the revision as failed with the existing failure
+   codes, marked as failed before any predecessor stop (see below). The
+   predecessor is not touched.
+
 2. **Exclusive stage (unchanged).** Stop predecessors, then
    `prepareAfterPredecessors` creates the Gateway and Harness workloads that
    mount the claims, waits for readiness, and activates.
+
+### Failure before the stop
+
+Three readers on main assume that a failed newer dedicated revision stopped its
+predecessor:
+
+- the console's `replacementFailed` check in
+  `apps/controller/src/console/agents/detail.mjs` shows "Probably down" and asks
+  for a new deployment whenever the latest dedicated deployment failed and an
+  older revision is current;
+- native admin's `replacesActiveWorkload` in
+  `apps/controller/src/http/native-admin.ts` reports the Agent unavailable while
+  a newer exclusive revision exists;
+- the worker's supersede check in `apps/controller/src/worker.ts` ends
+  reconciliation and maintenance of every revision older than an admitted
+  exclusive revision, whatever that revision's outcome.
+
+The worker must therefore record, with the failed deployment, that it failed
+before stopping any predecessor, and the deployment status API must report it.
+For such a failure the console shows the failure with the current revision still
+serving, native admin stays available, and the supersede check ignores the
+failed revision so the predecessor keeps its maintenance. A failure after the
+stop keeps today's "Probably down" state.
+
+### Compatibility
 
 Drivers that do not implement the new stage keep today's behavior. The stage
 must be idempotent and safe to repeat after a lost lease, like other preparation
@@ -110,7 +136,8 @@ provider request, as the startup check already does.
 ### Failure and recovery
 
 - Probe or pull failure: the revision fails before any stop; the predecessor
-  keeps serving, and its active pointer and routes are unchanged.
+  keeps serving, its active pointer, routes and maintenance are unchanged, and
+  status reports the failure as pre-stop.
 - Worker loss during pre-stop checks: the next pass repeats them; nothing has
   been stopped.
 - Failure after the stop: unchanged from today (deploy a higher revision).
@@ -126,11 +153,27 @@ provider request, as the startup check already does.
 ## Delivery and evidence
 
 One PR: the optional stage in the Compute contract and worker, the Kubernetes
-implementation, and an extension of the existing exclusive-replacement worker
-integration test (a replacement with a rejected credential must leave the
-predecessor's Pods running and its route active). The real-cluster case in
-`tests/integration/kubernetes-compute-real.test.mjs` measures the outage window
-before and after. Docs: Compute contract, harness execution, Kubernetes Compute.
+implementation, the pre-stop failure marker in deployment status, and its
+console, native admin and supersede handling. Kubernetes Compute maintainers
+review the Compute contract and worker changes.
+
+Evidence:
+
+- Extend the exclusive-replacement cases in
+  `tests/integration/postgres-worker-agent-revision.test.mjs` (fixtures in
+  `tests/helpers/postgres-worker-revision-fixture.mjs` since
+  [#1553](https://github.com/openclaw/openclaw-enterprise/pull/1553)): a
+  replacement with a rejected credential leaves the predecessor running, its
+  route active and its maintenance running, and its deployment status reports a
+  pre-stop failure.
+- Console and native admin tests: a pre-stop failure shows the failure without
+  "Probably down" and keeps native admin available; a failure after the stop
+  still shows "Probably down".
+- The real-cluster case in `tests/integration/kubernetes-compute-real.test.mjs`
+  measures the outage window before and after.
+
+Docs: Compute contract, harness execution, Kubernetes Compute, API deployment
+status.
 
 ## Open questions
 
