@@ -73,13 +73,15 @@ the removed Role or AccessBinding in the same transaction to record it.
 Role creation accepts only nonempty, duplicate-free permissions for Namespace
 resource kinds; `namespace` permissions support only `read`. `iamRolePermissions`
 also refuses action/kind pairs outside `SUPPORTED_PERMISSION_ACTIONS` (contracts),
-because no operation checks them. AccessBinding creation accepts identity subjects and exact
+because no operation checks them, and then any `create` Permission, because `create`
+is checked on the Namespace and this API binds only exact resources
+(`NAMESPACE_POLICY_CREATE_REASON`). AccessBinding creation accepts identity subjects and exact
 targets in the same Namespace, including the Namespace itself when the target
 ID matches the path Namespace. OCC verifies the target resource exists and that
 the caller can read it before asking the IAM Driver to create the binding.
-`assertAccessBindingRoleApplies` then refuses, with `400`, a Role that has a
-`create` Permission or no Permission for the target's kind, because evaluation
-would drop those grants.
+`assertAccessBindingRoleApplies` then refuses, with `400`, a Role that has no
+Permission for the target's kind, or a `create` Permission stored before Role
+creation refused them, because evaluation would drop those grants.
 
 ### 4. The IAM Driver persists or reads policy
 

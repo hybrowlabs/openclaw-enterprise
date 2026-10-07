@@ -59,6 +59,10 @@ occ installation get
 occ namespace list
 ```
 
+`occ` has no human sign-in: a service key authenticates a non-Agent
+ServicePrincipal, not a person. Without a key, use the
+[console](../reference/console.md).
+
 Replace both example values with your own. These commands require an
 Installation-scoped key; reading the Installation also requires Installation
 `read`. If your key is Namespace-scoped, use

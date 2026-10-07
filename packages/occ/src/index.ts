@@ -1009,10 +1009,19 @@ const NAMESPACE_POLICY_RESOURCE_KINDS: ReadonlySet<ResourceKind> = new Set<Resou
 ]);
 
 /**
+ * Why the Namespace policy API refuses `create` Permissions. `create` is authorized against
+ * the Namespace collection, never an existing resource, and this API binds only exact
+ * resources, so such a Permission could never take effect through it. Role creation and
+ * binding creation share the reason so their refusals stay consistent.
+ */
+const NAMESPACE_POLICY_CREATE_REASON =
+  "Create is checked on the Namespace, and this API binds only exact resources";
+
+/**
  * Refuses an AccessBinding whose Role cannot take effect on the binding's target, so a
- * policy write never reports success for a grant that IAM evaluation drops. `create` is
- * authorized against the Namespace, never an existing resource, so no exact-resource
- * binding grants it; a Role with no Permission for the target's kind grants nothing there.
+ * policy write never reports success for a grant that IAM evaluation drops. Role creation
+ * already refuses `create` Permissions; this check still covers stored Roles that predate
+ * that refusal. A Role with no Permission for the target's kind grants nothing there.
  * Roles that also name other kinds stay valid: one Role may be bound to several targets.
  */
 function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: ResourceKind): void {
@@ -1022,9 +1031,9 @@ function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: Reso
   if (creates.length > 0) {
     throw new IAMAccessBindingRoleError(
       fittedList(
-        `Role ${role.id} has Permissions that no AccessBinding can grant: `,
+        `Role ${role.id} has Permissions this API cannot bind: `,
         creates.map(label),
-        ". No AccessBinding grants create: only Installation administrators create resources; remove them from the Role.",
+        `. ${NAMESPACE_POLICY_CREATE_REASON}; bind a Role without them.`,
       ),
     );
   }
@@ -8299,6 +8308,21 @@ export class OpenClawController {
       throw new IAMPolicyValidationError(
         "/permissions",
         unsupportedPermissionsMessage(unsupported),
+      );
+    }
+    // A create Permission would be stored and then refused by every binding request
+    // (assertAccessBindingRoleApplies), so the Role is refused here instead.
+    const firstCreate = checked.findIndex((permission) => permission.action === "create");
+    if (firstCreate !== -1) {
+      throw new IAMPolicyValidationError(
+        `/permissions/${firstCreate}/action`,
+        fittedList(
+          "Namespace IAM Roles cannot grant create Permissions: ",
+          checked
+            .filter((permission) => permission.action === "create")
+            .map((permission) => `${permission.resourceKind}:create`),
+          `. ${NAMESPACE_POLICY_CREATE_REASON}; omit them from the Role.`,
+        ),
       );
     }
     return Object.freeze(checked);
