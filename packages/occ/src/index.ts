@@ -7595,12 +7595,15 @@ export class OpenClawController {
     const existingRole = await state.iamPolicy.getRole(namespaceId, roleId);
     if (
       existingRole !== undefined &&
-      (existingRole.permissions.length !== 1 ||
+      (existingRole.namespaceId !== namespaceId ||
+        existingRole.permissions.length !== 1 ||
         existingRole.permissions[0]?.action !== "read" ||
         existingRole.permissions[0]?.resourceKind !== "agent_revision")
     ) {
-      throw new ResourceConflictError(
-        "The deployed-revision read Role does not have the exact revision read permission.",
+      // ResourceStateConflictError keeps this message in the 409, so an operator can see
+      // which Role blocks deploys.
+      throw new ResourceStateConflictError(
+        `Role ${roleId} must grant exactly agent_revision read; delete or restore it before deploying.`,
       );
     }
     if (existingRole === undefined) {

@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
 updated: 2026-10-07
-last_updated_session: "codex/01a0eb4c-5933-7752-bddc-f787e8da79e7"
+last_updated_session: "d94-revision-read"
 ---
 
 # Namespace IAM Policy Flow

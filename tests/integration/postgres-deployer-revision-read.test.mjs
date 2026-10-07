@@ -182,7 +182,8 @@ test(
       [deployerBinding(second.revision.id), deployerBinding(fourth.revision.id)].sort(byId),
     );
 
-    // Deleting the Agent removes the grants with its revisions; the delete event lists them.
+    // The accepted delete event lists the grants among the bindings its completion removes
+    // (the finalizer predicate itself is covered by postgres-agent-deletion-audit).
     const deleting = await inject("DELETE", agentPath);
     assert.equal(deleting.statusCode, 202, deleting.body);
     const deleted = await pool.query(

@@ -6136,6 +6136,18 @@ test("deploy grants the deployer exact revision read only when it can hold the b
   ];
   const policy = async (kind) =>
     (await controller.request("GET", `/namespaces/${namespace.id}/iam/${kind}`)).data;
+  // This fixture's IAM Driver reads its own seed, not platform State policy, so this case
+  // proves which grant admission writes and audits; postgres-deployer-revision-read proves
+  // the written grant takes effect.
+
+  // The administrator already reads every revision, so her deploy writes nothing.
+  const byAdministrator = await fixture.controller.deployAgentWithAuthorization(
+    fixture.principal.id,
+    { namespaceId: namespace.id, agentId: agent.id },
+    resolveApprovedDevelopmentHarness,
+  );
+  assert.deepEqual(byAdministrator.grantedAccessBindings, []);
+  assert.deepEqual(await policy("access-bindings"), []);
 
   // An Installation-scoped ServicePrincipal may deploy but cannot be the subject of a
   // Namespace binding. Its deploy still succeeds, writes no grant and leaves no Role.
