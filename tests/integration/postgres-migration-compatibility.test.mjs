@@ -1694,8 +1694,8 @@ test(
     const secretId = `sec_${randomUUID()}`;
     await db.app.query(
       `INSERT INTO occ.secrets(id,namespace_id,name,driver_id,backend_namespace_name,backend_name,backend_key,backend_uid,created_at)
-       VALUES($1,$2,'Legacy OAuth','secrets','fixture','oauth-source','value','fixture-uid',now())`,
-      [secretId, namespaceId],
+       VALUES($1,$2,'Legacy OAuth','secrets','fixture','oauth-source','value',$3,now())`,
+      [secretId, namespaceId, randomUUID()],
     );
     const legacyBinding = {
       method: "oauth",
