@@ -44,7 +44,7 @@ graph TD
   R -- "Deadline or query failure" --> X["<b>Fail startup</b><br/>Skip Installation writing"]
   F -- "OpenShell" --> H["<b>Own Workspace</b><br/>OpenShell operator mode"]
   E -- "OpenShell" --> H
-  G --> I["<b>Record cleanup</b><br/>Exact engine and resources"]
+  G -- "Password-only" --> I["<b>Record cleanup</b><br/>Exact engine and resources"]
   H --> I
   E -- "Optional Keycloak profile" --> K["Provision Keycloak, TLS and Pod DNS"]
   K --> G
@@ -385,9 +385,8 @@ both Helm passes, recovery and destructive realm teardown.
 - `OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 node --test tests/integration/dev-up-openshell-k3d-real.test.mjs`
   selects the Compose-backed real-cluster proof.
 - `OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs`
-  selects the [real launcher cases](../../testing/kubernetes.md), including
-  Keycloak browser login, restart persistence, second-pass failure and cleanup.
-  It requires an owned disposable fixture; browser CA import remains a manual check.
+  selects the [real launcher cases](../../testing/keycloak.md#local-launcher-coverage),
+  including Keycloak login, persistence and failure cleanup.
 - A successful startup does not prove Agent creation, model credentials, or a
   model turn. Follow the owning runtime integration procedure for those claims.
 

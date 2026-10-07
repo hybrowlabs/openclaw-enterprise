@@ -87,28 +87,21 @@ reachable from the host. Other published ports cannot use 443. k3d publishes
 that port at creation, so add or remove the variable
 only with `dev-down` and a fresh `dev-up`.
 
-Startup runs Keycloak with realm `oce` in Namespace `occ-development-keycloak`,
-on a volume that survives Pod restarts. It then upgrades OCE with
-[OIDC sign-in](oidc-sign-in.md), the administrator as the recovery account and
-recovery-only password sign-in, and attaches Keycloak user `alice` to the
-administrator. OIDC needs host-only cookies, so this profile turns off
-[Agent native administration](../../reference/agent-native-admin.md).
+The persistent realm attaches `alice` to the existing administrator through
+[OIDC sign-in](oidc-sign-in.md), keeps passwords recovery-only, and disables
+[Agent native administration](../../reference/agent-native-admin.md). OpenShell
+is unsupported; password-only development remains the default.
 
-To sign in, import both printed CAs into the browser (`browser-ca.crt` for the
-Console, `gateway-ca.crt` for Keycloak) and add the printed `/etc/hosts` line.
-Open the Console, choose **Continue with Keycloak**, and sign in as `alice` with
-the password in `keycloak-alice-password`. The administrator password still
-signs in, for recovery only. Keep that private password file available while
-verifying the Keycloak login. This optional profile does not support OpenShell
-or native Agent browser administration; password-only development remains the
-default.
+Import the printed CAs (`browser-ca.crt` and `gateway-ca.crt`) into your browser
+and add the printed `/etc/hosts` entry. Open the Console, choose **Continue with
+Keycloak**, and use `alice` with `keycloak-alice-password`. Keep the generated
+administrator password for recovery.
 
-`dev-down` destroys the realm volume and cluster. If cleanup retains state, fix
-the reported access problem and retry with the same profile and state directory;
-keep that directory until cleanup succeeds. Remove added host entries and imported
-CAs separately. Certificate copying and realm-drift checks run only at installation.
-See the [Keycloak lifecycle](../../flows/docker-compose-development/keycloak.md)
-for both Helm passes, identity attachment and recovery.
+`dev-down` destroys the realm volume and cluster. If cleanup retains state,
+repair the reported access problem and retry with the same profile and directory.
+Remove host entries and imported CAs separately. The
+[Keycloak lifecycle](../../flows/docker-compose-development/keycloak.md) covers
+both Helm passes, recovery, installation-only drift checks and certificate copying.
 
 ### Run OCC in Compose with Kubernetes compute
 
