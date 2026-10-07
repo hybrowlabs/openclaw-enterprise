@@ -69,9 +69,11 @@ these fields are not caller-selected Agent configuration. The placeholder must
 be the exact value recognized by the egress injector. Real access tokens,
 refresh tokens, and the original ID token stay outside the Harness.
 
-Compute passes the placeholder and account metadata to the dedicated Codex
-entrypoint. It writes an ephemeral `auth.json` with
-`auth_mode: "chatgptAuthTokens"`, the unchanged access-token placeholder, an
+Compute validates one attachment per authorized source and selects the Codex
+attachment by `harnessAuth.sourceId`, independently of attachment order. It passes
+every attachment to the Sandbox and the selected placeholder and account metadata
+to the dedicated Codex entrypoint. The entrypoint writes an ephemeral `auth.json`
+with `auth_mode: "chatgptAuthTokens"`, the unchanged access-token placeholder, an
 empty refresh token, and a synthetic ID-token payload containing the account
 metadata. Native Codex uses that metadata for account identity, plan and
 workspace decisions. This external mode does not run native OAuth refresh;

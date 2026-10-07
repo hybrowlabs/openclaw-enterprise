@@ -4592,6 +4592,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
           credentialContext === undefined
             ? []
             : await this.requireCredentialGateway().attachForRevision(credentialContext);
+        const sourceIds = new Set(credentialContext?.sources.map(({ id }) => id));
+        const attachedSourceIds = new Set(attachments.map(({ sourceId }) => sourceId));
+        if (
+          attachments.length !== sourceIds.size ||
+          attachedSourceIds.size !== attachments.length ||
+          attachments.some(({ sourceId }) => !sourceIds.has(sourceId))
+        ) {
+          throw new ConfigurationFailure(
+            "The Credential Gateway must attach each bound source exactly once.",
+          );
+        }
         const renderedRequirements = this.harnessRequirementsFromDeployment(
           agentDeployment,
           harnessAuth.loginMode,
@@ -7722,10 +7733,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (revision.harnessAuth.method !== "credential_source") {
       return [];
     }
-    if (attachments.length !== 1 || attachments[0]?.sourceId !== revision.harnessAuth.sourceId) {
-      throw new ConfigurationFailure("The Credential Gateway must attach the exact bound source.");
+    const sourceId = revision.harnessAuth.sourceId;
+    const attachment = attachments.find((entry) => entry.sourceId === sourceId);
+    if (attachment === undefined) {
+      throw new ConfigurationFailure(
+        "The Credential Gateway did not attach the Harness authentication source.",
+      );
     }
-    const auth = attachments[0].externalChatgptAuth;
+    const auth = attachment.externalChatgptAuth;
     if (revision.harnessAuth.loginMode !== "chatgptAuthTokens") {
       if (auth !== undefined) {
         throw new ConfigurationFailure(

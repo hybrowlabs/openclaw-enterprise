@@ -11408,14 +11408,34 @@ test("external ChatGPT source preparation delivers the exact placeholder and acc
     false,
   );
 
+  await t.test("selects Harness authentication by source ID among multiple attachments", () => {
+    const toolAttachment = {
+      sourceId: "cs_00000000-0000-4000-8000-000000000002",
+      ref: "tool-grant-reference",
+    };
+    // Tool attachments may precede the model attachment. Only the selected
+    // Harness source supplies Codex's local authentication state.
+    const environment = driver.credentialSourceEnvironment(revision, [toolAttachment, attachment]);
+    assert.deepEqual(environment, [
+      { name: "CODEX_ACCESS_TOKEN", value: placeholder },
+      { name: "OCE_CODEX_CHATGPT_ACCOUNT", value: JSON.stringify(account) },
+    ]);
+  });
+
   // A trusted Driver response still has to match the admitted source and
   // receiver contract before any new Sandbox provisioning occurs.
   for (const [name, invalid, expected] of [
-    ["missing attachment", [], /exact bound source/],
+    ["missing attachment", [], /each bound source exactly once/],
+    ["duplicate attachment", [attachment, attachment], /each bound source exactly once/],
     [
       "foreign source",
       [{ ...attachment, sourceId: "cs_00000000-0000-4000-8000-000000000002" }],
-      /exact bound source/,
+      /each bound source exactly once/,
+    ],
+    [
+      "unexpected extra source",
+      [attachment, { sourceId: "cs_00000000-0000-4000-8000-000000000002", ref: "foreign-grant" }],
+      /each bound source exactly once/,
     ],
     ["missing account", [{ sourceId: source.id, ref: attachment.ref }], /invalid external ChatGPT/],
     [

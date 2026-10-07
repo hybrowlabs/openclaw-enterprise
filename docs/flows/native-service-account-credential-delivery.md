@@ -230,9 +230,14 @@ Secret values.
 `apps/controller/src/drivers/compute/kubernetes/index.ts:credentialSourceEnvironment`,
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:AGENT_RUNTIME_ENTRYPOINT`
 
-The admitted source attachment supplies a placeholder and trusted account metadata.
-Compute sends these only to the Harness. Its launcher writes ephemeral
-`chatgptAuthTokens` auth state without a refresh token and runs the normal native
+Compute checks that the returned attachments match the authorized sources exactly,
+with no missing, duplicate, or unexpected source IDs, before provisioning the
+Sandbox. It selects the attachment named by `harnessAuth.sourceId` for the Codex
+placeholder and trusted account metadata, and passes every attachment to the
+Sandbox. Attachment order does not select Harness authentication.
+
+Compute sends the placeholder and account metadata only to the Harness. Its
+launcher writes ephemeral `chatgptAuthTokens` auth state without a refresh token and runs the normal native
 probe before app-server startup. The external service retains refresh ownership;
 the paired Sandbox injects a warm access token into authorized outgoing requests.
 There is no native-refresh or persistent-bundle fallback. Restarts reconstruct the
@@ -282,6 +287,8 @@ an external OAuth Driver and service; the bundled catalog offers API keys only.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 16:05: Select Harness authentication by source ID and validate the complete credential attachment set. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 046c3d75e)
 
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 
