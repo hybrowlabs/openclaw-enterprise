@@ -82,7 +82,9 @@ before running the launcher.
 
 Add `OCC_DEVELOPMENT_SIGN_IN=keycloak` to the profile above to sign in through a
 development Keycloak rather than the generated password. Host `127.0.0.1:443`
-must be free. k3d publishes that port at creation, so add or remove the variable
+must be free and bindable by the selected engine, with loopback publication
+reachable from the host. Other published ports cannot use 443. k3d publishes
+that port at creation, so add or remove the variable
 only with `dev-down` and a fresh `dev-up`.
 
 Startup runs Keycloak with realm `oce` in Namespace `occ-development-keycloak`,
@@ -96,7 +98,17 @@ To sign in, import both printed CAs into the browser (`browser-ca.crt` for the
 Console, `gateway-ca.crt` for Keycloak) and add the printed `/etc/hosts` line.
 Open the Console, choose **Continue with Keycloak**, and sign in as `alice` with
 the password in `keycloak-alice-password`. The administrator password still
-signs in, for recovery only. `dev-down` deletes Keycloak and its realm.
+signs in, for recovery only. Keep that private password file available while
+verifying the Keycloak login. This optional profile does not support OpenShell
+or native Agent browser administration; password-only development remains the
+default.
+
+`dev-down` destroys the realm volume and cluster. If cleanup retains state, fix
+the reported access problem and retry with the same profile and state directory;
+keep that directory until cleanup succeeds. Remove added host entries and imported
+CAs separately. Certificate copying and realm-drift checks run only at installation.
+See the [Keycloak lifecycle](../../flows/docker-compose-development/keycloak.md)
+for both Helm passes, identity attachment and recovery.
 
 ### Run OCC in Compose with Kubernetes compute
 

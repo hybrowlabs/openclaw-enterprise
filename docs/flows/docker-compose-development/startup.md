@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-05
-last_updated_session: authoring-run/cfd0ce95-b6e3-4088-a97b-d6d4c9ff400c
+updated: 2026-10-07
+last_updated_session: authoring-run/aaa97aa0-d766-4366-af99-089d183c088a
 ---
 
 # Compose development startup
@@ -46,6 +46,11 @@ graph TD
   E -- "OpenShell" --> H
   G --> I["<b>Record cleanup</b><br/>Exact engine and resources"]
   H --> I
+  E -- "Optional Keycloak profile" --> K["Provision Keycloak, TLS and Pod DNS"]
+  K --> G
+  G -- "Keycloak ready" --> L["Second Helm pass: OIDC and recovery-only passwords"]
+  L --> M["Attach Alice to the existing administrator"]
+  M --> I
 ```
 
 ## Execution trace
@@ -358,6 +363,18 @@ and its helper-owned key. A successfully returned external
 `--key-output` file remains operator-owned; startup removes a newly written
 external key if a later OpenShell readiness step fails.
 
+### 15. Start and remove the optional Keycloak profile
+
+`internal/occdev/keycloak_k3d.go:installDevelopmentKeycloak`,
+`internal/occdev/keycloak_k3d.go:signInDevelopmentKeycloak`,
+`internal/occdev/down.go:cleanup`.
+
+With `OCC_DEVELOPMENT_SIGN_IN=keycloak`, the Kubernetes-only sandbox `none`
+profile provisions Keycloak before authenticated readiness, then enables OIDC
+and attaches Alice to the administrator. The
+[Keycloak lifecycle](keycloak.md) traces port validation, DNS, certificate copying,
+both Helm passes, recovery and destructive realm teardown.
+
 ## Debugging and Verification
 
 - `node --test tests/integration/dev-up.test.mjs` exercises profile selection,
@@ -367,6 +384,10 @@ external key if a later OpenShell readiness step fails.
   selects the Kubernetes-only real-cluster proof.
 - `OCC_TEST_DEV_UP_OPENSHELL_COMPOSE_REAL=1 node --test tests/integration/dev-up-openshell-k3d-real.test.mjs`
   selects the Compose-backed real-cluster proof.
+- `OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs`
+  selects the [real launcher cases](../../testing/kubernetes.md), including
+  Keycloak browser login, restart persistence, second-pass failure and cleanup.
+  It requires an owned disposable fixture; browser CA import remains a manual check.
 - A successful startup does not prove Agent creation, model credentials, or a
   model turn. Follow the owning runtime integration procedure for those claims.
 
@@ -381,6 +402,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 23:31: Documented optional Keycloak startup, identity attachment and cleanup. (authoring-run/aaa97aa0-d766-4366-af99-089d183c088a - c14b315969527a4e1f3fc3bd525e54d2ed5ec030)
 
 - 2026-10-05 08:52: Documented bridge-route cancellation and node-inventory context. (authoring-run/cfd0ce95-b6e3-4088-a97b-d6d4c9ff400c - fa8c90b5b6eb3464fcf3af42a7297b5de7d65454)
 

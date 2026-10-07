@@ -20,6 +20,9 @@ verify workspace writes succeed and outside writes fail; neither proves model
 execution, and the Compose case does not prove Agent routing. Failed cleanup
 preserves state for `occ dev down`.
 
+The same file selects the [Keycloak launcher cases](keycloak.md#local-launcher-coverage),
+which require exclusive, bindable loopback port 443 and sandbox-capable Chromium.
+
 See [two-cluster validation](two-cluster-local.md).
 
 ## Kubernetes HTTP fixture

@@ -706,3 +706,317 @@ test(
     );
   },
 );
+
+test(
+  "dev-up Keycloak profile signs in the administrator, preserves the realm and cleans up",
+  {
+    skip: selected ? false : "Set OCC_TEST_DEV_UP_K3D_REAL=1 to run the real development profile.",
+    timeout: 1_800_000,
+  },
+  async (t) => {
+    const { keycloakLauncher, publishedJSON } = await import("../helpers/dev-up-keycloak.mjs");
+    const { createHash, X509Certificate } = await import("node:crypto");
+    const { chromium } = await import("playwright");
+    const fixture = await keycloakLauncher(t);
+    await fixture.dev("up");
+    const state = JSON.parse(await fixture.read("state.json"));
+    assert.equal(state.signIn, "keycloak");
+    const values = JSON.parse(await fixture.read("helm-values.json"));
+    assert.equal(values.auth.oidc.enabled, true);
+    assert.equal(values.auth.passwordSignIn, "recovery-only");
+    assert.equal(values.agentNativeAdmin.enabled, false);
+    const issuer = `https://${fixture.keycloakHost}/realms/oce`;
+    const discovery = await publishedJSON(
+      {
+        hostname: fixture.keycloakHost,
+        port: 443,
+        ca: await fixture.read("gateway-ca.crt"),
+      },
+      "/realms/oce/.well-known/openid-configuration",
+    );
+    assert.equal(discovery.issuer, issuer);
+    assert.equal(discovery.token_endpoint, `${issuer}/protocol/openid-connect/token`);
+    const providers = await publishedJSON(
+      {
+        hostname: fixture.consoleHost,
+        port: fixture.browserPort,
+        ca: await fixture.read("browser-ca.crt"),
+      },
+      "/api/auth/providers",
+    );
+    assert.equal(providers.data.oidc, true);
+    assert.equal(providers.data.password, false);
+
+    // Trust only this fixture's issued leaves. Chromium retains its sandbox;
+    // host mapping is scoped to this process, with no global DNS/CA mutation.
+    const mirror = JSON.parse(await fixture.read("keycloak-tls.json"));
+    const certificates = [
+      await fixture.read("browser-tls.crt"),
+      Buffer.from(mirror.data["tls.crt"], "base64"),
+    ];
+    const pins = certificates.map((cert) =>
+      createHash("sha256")
+        .update(new X509Certificate(cert).publicKey.export({ type: "spki", format: "der" }))
+        .digest("base64"),
+    );
+    const browser = await chromium.launch({
+      headless: true,
+      chromiumSandbox: true,
+      args: [
+        `--ignore-certificate-errors-spki-list=${pins.join(",")}`,
+        `--host-resolver-rules=MAP ${fixture.consoleHost} 127.0.0.1, MAP ${fixture.keycloakHost} 127.0.0.1`,
+      ],
+      ...(process.env.OCC_TEST_BROWSER_EXECUTABLE
+        ? { executablePath: process.env.OCC_TEST_BROWSER_EXECUTABLE }
+        : {}),
+    });
+    const origin = `https://${fixture.consoleHost}:${fixture.browserPort}`;
+    const api = (page, path, body) =>
+      page.evaluate(
+        async ({ path, body }) => {
+          const response = await fetch(path, {
+            method: body === undefined ? "GET" : "POST",
+            ...(body === undefined
+              ? {}
+              : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+            signal: AbortSignal.timeout(10_000),
+          });
+          return { status: response.status, json: await response.json() };
+        },
+        { path, body },
+      );
+    let alicePassword = (await fixture.read("keycloak-alice-password")).trim();
+    try {
+      const recovery = await browser.newContext();
+      const page = await recovery.newPage();
+      await page.goto(`${origin}/console/`);
+      const signedIn = await api(page, "/api/auth/sign-in/email", {
+        email: "admin@development.openclaw.invalid",
+        password: (await fixture.read("initial-admin-password")).trim(),
+      });
+      assert.equal(signedIn.status, 200, "the recovery administrator remains usable");
+      const admin = await api(page, "/api/auth/session");
+      assert.equal(admin.status, 200);
+      const adminId = admin.json.data.user.id;
+      assert.equal(adminId, values.auth.recoveryUserId);
+      // Create a real password account through the supported administrator API.
+      // Its correct password must still be denied in the recovery-only profile.
+      const member = { email: `member-${randomUUID()}@example.test`, password: randomUUID() };
+      const created = await api(page, "/api/auth/accounts", member);
+      assert.equal(created.status, 201);
+      await recovery.close();
+      const ordinary = await browser.newContext();
+      const ordinaryPage = await ordinary.newPage();
+      await ordinaryPage.goto(`${origin}/console/`);
+      assert.equal((await api(ordinaryPage, "/api/auth/sign-in/email", member)).status, 401);
+      await ordinary.close();
+
+      const signInAlice = async () => {
+        const context = await browser.newContext();
+        try {
+          const page = await context.newPage();
+          await page.goto(`${origin}/console/`);
+          const result = page.waitForResponse(
+            (response) => new URL(response.url()).pathname === "/api/auth/providers/oidc/result",
+          );
+          result.catch(() => {});
+          await page.getByRole("button", { name: "Continue with Keycloak" }).click();
+          await page.waitForURL((url) => url.origin === new URL(issuer).origin);
+          await page.locator("#username").fill("alice");
+          await page.locator("#password").fill(alicePassword);
+          await page.locator("#kc-login").click();
+          assert.equal((await result).status(), 200);
+          await page.waitForURL(/\/console\/(agents|providers|namespaces|settings)/);
+          const session = await api(page, "/api/auth/session");
+          assert.equal(session.status, 200);
+          assert.equal(
+            session.json.data.user.id,
+            adminId,
+            "Alice is attached to the existing administrator",
+          );
+          // This guarded read also proves administrator authorization survived attachment.
+          assert.equal((await api(page, `/api/auth/accounts/${adminId}`)).status, 200);
+          const cookies = await context.cookies(origin);
+          const sessionCookie = cookies.find(
+            ({ name, value }) => name.endsWith(".session_token") && value,
+          );
+          assert.ok(sessionCookie);
+          assert.equal(sessionCookie.domain, fixture.consoleHost);
+          assert.equal(sessionCookie.secure, true);
+          assert.equal(sessionCookie.httpOnly, true);
+        } finally {
+          await context.close();
+        }
+      };
+      await signInAlice();
+      // A password changed after realm import must survive the Pod restart.
+      // Reimporting the fixture into an empty database cannot satisfy this proof.
+      const keycloak = {
+        hostname: fixture.keycloakHost,
+        port: 443,
+        ca: await fixture.read("gateway-ca.crt"),
+      };
+      const token = await publishedJSON(keycloak, "/realms/master/protocol/openid-connect/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "password",
+          client_id: "admin-cli",
+          username: "admin",
+          password: (await fixture.read("keycloak-admin-password")).trim(),
+        }).toString(),
+      });
+      assert.equal(typeof token.access_token, "string");
+      const realm = JSON.parse(
+        await readFile(join(repository, "tests/fixtures/keycloak/realm-oce.json"), "utf8"),
+      );
+      const alice = realm.users.find(({ username }) => username === "alice");
+      assert.ok(alice?.id);
+      alicePassword = randomUUID();
+      await publishedJSON(keycloak, `/admin/realms/oce/users/${alice.id}/reset-password`, {
+        method: "PUT",
+        expectedStatus: 204,
+        headers: {
+          authorization: `Bearer ${token.access_token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ type: "password", value: alicePassword, temporary: false }),
+      });
+      const before = JSON.parse(
+        (
+          await fixture.kubectl([
+            "-n",
+            "occ-development-keycloak",
+            "get",
+            "pods",
+            "-l",
+            "app=keycloak",
+            "-o",
+            "json",
+          ])
+        ).stdout,
+      );
+      assert.equal(before.items.length, 1);
+      await fixture.kubectl([
+        "-n",
+        "occ-development-keycloak",
+        "rollout",
+        "restart",
+        "deployment/keycloak",
+      ]);
+      await fixture.kubectl([
+        "-n",
+        "occ-development-keycloak",
+        "rollout",
+        "status",
+        "deployment/keycloak",
+        "--timeout=180s",
+      ]);
+      const after = JSON.parse(
+        (
+          await fixture.kubectl([
+            "-n",
+            "occ-development-keycloak",
+            "get",
+            "pods",
+            "-l",
+            "app=keycloak",
+            "-o",
+            "json",
+          ])
+        ).stdout,
+      );
+      assert.ok(after.items.some((pod) => pod.metadata.uid !== before.items[0].metadata.uid));
+      // A fresh browser session must authenticate with the same persisted realm credentials.
+      await signInAlice();
+    } finally {
+      await browser.close();
+    }
+    await fixture.dev("down");
+    assert.equal(existsSync(fixture.stateDirectory), false);
+    await fixture.assertCluster(false);
+  },
+);
+
+test(
+  "dev-up Keycloak second-pass failure retains recovery state until owned cleanup succeeds",
+  {
+    skip: selected ? false : "Set OCC_TEST_DEV_UP_K3D_REAL=1 to run the real development profile.",
+    timeout: 1_800_000,
+  },
+  async (t) => {
+    const { keycloakLauncher } = await import("../helpers/dev-up-keycloak.mjs");
+    const fixture = await keycloakLauncher(t);
+    const realHelm = (await fixture.run("which", ["helm"])).stdout.trim();
+    const realK3d = (await fixture.run("which", ["k3d"])).stdout.trim();
+    assert.ok(realHelm.startsWith("/") && realK3d.startsWith("/"));
+    const helmMarker = join(fixture.root, "second-pass-failed");
+    const deleteMarker = join(fixture.root, "delete-failed");
+    // External command faults surround the real launcher. First-pass Helm,
+    // Keycloak provisioning and all NetworkPolicies run normally. Refuse only
+    // this cluster's second upgrade and first deletion, then use genuine down.
+    for (const [name, real, fault] of [
+      [
+        "helm",
+        realHelm,
+        `const index = args.indexOf("-f");
+if (args[0] === "upgrade" && index >= 0 && args[index + 1] === ${JSON.stringify(join(fixture.stateDirectory, "helm-values.json"))} && JSON.parse(readFileSync(args[index + 1], "utf8")).auth.oidc?.enabled) {
+  writeFileSync(${JSON.stringify(helmMarker)}, "second pass reached");
+  console.error("injected second Helm pass failure"); process.exit(1);
+}`,
+      ],
+      [
+        "k3d",
+        realK3d,
+        `if (args[0] === "cluster" && args[1] === "delete" && args[2] === ${JSON.stringify(fixture.cluster)} && !existsSync(${JSON.stringify(deleteMarker)})) {
+  writeFileSync(${JSON.stringify(deleteMarker)}, "owned deletion refused");
+  console.error("injected owned cluster deletion failure"); process.exit(1);
+}`,
+      ],
+    ]) {
+      await writeFile(
+        join(fixture.root, name),
+        `#!${process.execPath}
+const { spawnSync } = require("node:child_process");
+const { readFileSync, writeFileSync, existsSync } = require("node:fs");
+const args = process.argv.slice(2);
+${fault}
+const result = spawnSync(${JSON.stringify(real)}, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+        { mode: 0o700 },
+      );
+    }
+    await assert.rejects(
+      fixture.dev("up", {
+        ...fixture.environment,
+        PATH: `${fixture.root}${delimiter}${fixture.environment.PATH}`,
+      }),
+      (error) => {
+        assert.match(error.stdout, /Enabling Keycloak sign-in \(second Helm pass\)/);
+        assert.match(error.stderr, /injected second Helm pass failure/);
+        assert.match(error.stderr, /injected owned cluster deletion failure/);
+        return true;
+      },
+    );
+    assert.equal(existsSync(helmMarker), true);
+    assert.equal(existsSync(deleteMarker), true);
+    assert.equal(JSON.parse(await fixture.read("state.json")).cluster, fixture.cluster);
+    for (const name of ["kubeconfig", "initial-admin-password", "keycloak-alice-password"]) {
+      assert.equal((await stat(join(fixture.stateDirectory, name))).mode & 0o077, 0);
+    }
+    await fixture.assertCluster(true);
+    const namespace = await fixture.kubectl([
+      "get",
+      "namespace",
+      "occ-development-keycloak",
+      "--ignore-not-found",
+      "-o",
+      "name",
+    ]);
+    assert.equal(namespace.stdout.trim(), "", "rollback removes the realm before cluster deletion");
+    await fixture.dev("down");
+    assert.equal(existsSync(fixture.stateDirectory), false);
+    await fixture.assertCluster(false);
+  },
+);

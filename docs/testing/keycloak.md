@@ -102,3 +102,27 @@ The line only helps when `/etc/hosts` is read before other resolvers. If
 
 To bump Keycloak, change `image.json` to a new 26.x digest and rerun the lane; the
 login-form selectors used by later sign-in tests are tied to that version.
+
+## Local launcher coverage
+
+The `dev-up-k3d` lane owns two additional cases in
+[`dev-up-k3d-real.test.mjs`](../../tests/integration/dev-up-k3d-real.test.mjs).
+They are distinct from this page's standalone discovery/JWKS fixture.
+
+```sh
+OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs
+```
+
+Run only on an
+owned disposable engine with enough capacity for the launcher and its image
+builds, free and bindable host loopback port 443, and prepared Playwright Chromium
+with its sandbox supported. Do not run beside the standalone Keycloak CI fixture.
+The cases use `occ dev up` with Kubernetes compute/control plane and sandbox
+`none`; they preserve enforcing NetworkPolicies and use generated fixture
+credentials only. They cover HTTPS discovery, Alice attached to the development
+administrator, recovery-password success, ordinary-password denial, fresh login with a changed password
+after a Keycloak Pod restart, and `occ dev down`. The failure case refuses the
+second Helm command and first owned cluster deletion to verify rollback and
+retained state, then retries real cleanup. Failed cleanup preserves that state.
+Browser DNS mappings and certificate pins are process-local; this automation does
+not verify a human browser's CA import or manual hosts-file setup.
