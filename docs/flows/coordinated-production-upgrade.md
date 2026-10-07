@@ -96,8 +96,9 @@ temporary Secret holding the candidate. The Pod runs `loadStartupConfigurationSn
 and `loadInstallationConfiguration`, which resolve Drivers and Preset files
 without the database. With the bundled Kubernetes Compute Driver it then runs
 `KubernetesComputeDriver.preflight` with the Pod's Kubernetes credentials (its
-service account in `inCluster` mode), as API and worker startup do; that check refuses, for example, single-cluster
-[split-layout Gateway storage](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations).
+service account in `inCluster` mode), as API and worker startup do; that check refuses, for example, two single-cluster namespaces claiming
+[canonical storage](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
+for one Namespace.
 Each Pod then checks the stored Installation name from the helper's
 `occ installation get` with the image's `isName`, the check the controller
 applies after it reads the name from the database (`INSTALLATION_NAME_INVALID`);
@@ -244,6 +245,7 @@ access, and required restore behavior.
 
 ## Changelog
 
+- 2026-10-07 17:15: The candidate preflight accepts legacy split-layout tenants and refuses two storage targets for one Namespace. (fix-533-migration)
 - 2026-10-07 12:00: Say that a controller-only release leaves existing revisions on their old Pod specification until the next deployment. (dogfood-r43)
 
 - 2026-10-05 15:01: Keep filesystem layers outside the image identity metadata budget. (authoring-run/0b8bd46b-85c0-4664-8dbd-2ee77cd7b602 - 08248f8dbf227dfb7b73162056b6afd1c33cee0d)

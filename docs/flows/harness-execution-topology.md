@@ -110,12 +110,14 @@ for admission, immutable source snapshots, and worker reauthorization.
 Configured API composition, including development, and worker startup call
 `KubernetesComputeDriver.preflight` through the optional Compute contract
 before tenant reconciliation. In a single cluster it checks every page of storage
-namespaces and refuses a legacy split target without altering its labels or state.
+namespaces, accepts a legacy split target and refuses a Namespace ID with two
+storage targets, without altering labels or state.
 The [upgrade requirements](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
 own the operator boundary.
 
 Kubernetes `ensureNamespace` prepares one tenant namespace in a single cluster,
 including adopted namespaces; its storage-role label enables discovery.
+A legacy split tenant keeps its unlabelled Harness namespace and existing Gateway target.
 The two-cluster profile retains its control-cluster Gateway target.
 `prepareRevision` and `activateRevision` keep dedicated Gateway and Harness Pods,
 identities and PVCs separate in their selected targets. `deliverGatewaySecrets`
@@ -313,6 +315,7 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 
 ## Changelog
 
+- 2026-10-07 17:15: Keep legacy split-layout tenants; refuse two storage targets. (fix-533-migration)
 - 2026-10-03 16:02: Run configured development API and worker Compute preflight before admitting work. (01a0fe72-58b2-7cc3-b770-7310f5401deb - c04093189f2ba6240f8dc431847c2f487afd11de)
 
 - 2026-10-03 15:38: Refuse unsafe split-layout upgrades and converge concurrent legacy password creation. (01a0fe72-58b2-7cc3-b770-7310f5401deb - 94364ae9)

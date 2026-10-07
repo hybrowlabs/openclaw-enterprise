@@ -33,28 +33,25 @@ Detailed operator contracts:
 
 ## Existing split-layout installations
 
-An in-place upgrade from separate Gateway and Harness namespaces is not supported.
-API and worker startup preflight refuses a single-cluster installation containing
-an `oce-gateways-<hash>` storage namespace without the tenant discovery label.
-This check runs before tenant reconciliation; it does not move or delete runtime
-resources. The experimental two-cluster profile retains its separate target.
+Earlier releases gave each single-cluster Namespace a Harness namespace and an
+`oce-gateways-<hash>` namespace holding the Gateway, its PVC and canonical
+Secrets. The driver keeps such a tenant on that layout and moves nothing.
 
-Before replacing the controller images, inspect the existing storage targets:
+A split-layout tenant's Harness namespace lacks the
+`openclaw.dev/gateway-namespace` label; its `oce-gateways-<hash>` namespace has
+that label, the manager label and the Namespace ID annotation, but no tenant
+label. The driver never creates that namespace, refuses one with other labels,
+and deletes both when the tenant is deleted.
 
 ```sh
 kubectl get namespaces -l openclaw.dev/gateway-namespace -L openclaw.dev/namespace
 ```
 
 In a single cluster, a row with an empty `NAMESPACE` column is a split-layout
-tenant. The two-cluster profile's control-cluster rows are expected.
-
-If an Installation has split-layout tenants, keep its existing controller release
-and both namespaces. Preserve their Secrets, ConfigMaps, PVCs and database
-references. Do not delete the old namespace, remove its storage-role label or
-add a tenant label to bypass preflight: those changes do not move the Gateway's
-private state or update UID-bound credential references. A supported migration
-must preserve these identities and state before this release can manage that
-Installation. This release provides no such migration command.
+tenant; two-cluster control rows are expected. Startup preflight refuses a
+Namespace ID that two namespaces claim as storage. Do not label the Harness
+namespace or delete or relabel the old one: that moves neither the Gateway's
+state nor its UID-bound credentials. No command moves a tenant to the shared layout.
 
 ## Requirements
 

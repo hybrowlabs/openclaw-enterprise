@@ -234,10 +234,10 @@ bootstrap record disagree.
 
 ## Upgrade the control plane
 
-Releases with the shared tenant namespace refuse to start on a single-cluster
-Installation with
-[split-layout tenants](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations);
-check before the maintenance window.
+Controller startup refuses a single-cluster Installation where two namespaces
+claim storage for one Namespace; existing
+[split-layout tenants](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
+are accepted. Check before the maintenance window.
 
 Set the controller image and run the command without `--runtime-image`:
 
@@ -271,8 +271,8 @@ NetworkPolicy. Each loads the Installation, Drivers and `presets.files`, then
 runs the bundled Kubernetes Compute Driver's preflight as startup does, without
 opening the database. Each then checks the stored Installation name, which the
 command reads through OCC, against the image's Name rule. If either fails, as
-when a listed Preset file is missing from the image, split-layout tenants remain
-or the name
+when a listed Preset file is missing from the image, two namespaces claim
+storage for one Namespace, or the name
 [breaks the rule](production-upgrade-recovery.md#correct-an-invalid-installation-name),
 the command prints each failure, deletes these resources, and stops; the old
 release keeps serving. Logs and

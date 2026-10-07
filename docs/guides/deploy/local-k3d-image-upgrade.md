@@ -41,8 +41,8 @@ upgrade or preserve a demo. See the [demo lifecycle](../../testing/kubernetes.md
   [binding the Installation](production-upgrade.md#bind-the-installation-once)
   if its Secret lacks the required annotation.
 - Run the [split-layout check](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations).
-  If it reports split-layout tenants, do not upgrade: keep the existing release.
-  The script's startup preflight also refuses split-layout tenants and stops
+  Split-layout tenants keep their Gateway namespace. The script's startup
+  preflight refuses a Namespace that two namespaces claim as storage and stops
   before it scales the API and worker to zero.
 - Meet the [upgrade permissions and concurrency requirements](production-upgrade.md#prepare-the-release).
   For runtime upgrades, review saved drafts and stop other deployments and edits:

@@ -30,10 +30,10 @@ command; use this page as its migration inventory.
       `devday.json`) afterward.
 - [ ] On a single-cluster install, run
       `kubectl get namespaces -l openclaw.dev/gateway-namespace -L openclaw.dev/namespace`.
-      Releases with the shared tenant namespace refuse to start while a row has
-      an empty `NAMESPACE` column (a
-      [split-layout tenant](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations));
-      the image helper's preflight stops before quiescence.
+      An empty `NAMESPACE` column marks a
+      [split-layout tenant](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations),
+      which is kept. Startup and the image helper's preflight refuse two
+      storage namespaces for one Namespace.
 - [ ] Before the window, render the candidate chart with your live values
       (`helm template`): releases after 2026-10-05
       [refuse some values](production-upgrade-recovery.md#correct-values-newer-releases-refuse)

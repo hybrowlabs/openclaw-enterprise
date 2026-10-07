@@ -88,10 +88,10 @@ same ID, and otherwise says to inspect it. The helper
 rechecks its status on resume; it does not verify how you identified an
 accepted request.
 
-If the candidate API and worker refuse to start because of
-[split-layout Gateway storage](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations),
-`--resume` cannot succeed. Keep both namespaces and their storage, and return to
-the previous controller image after the check below.
+If the candidate API and worker refuse to start because two namespaces claim
+[canonical storage](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
+for one Namespace, `--resume` cannot succeed. Keep both namespaces and their
+storage, and return to the previous controller image after the check below.
 
 Before selecting an older controller or runtime image, verify it can read all
 state written by the candidate and restore compatible data if required. Never
