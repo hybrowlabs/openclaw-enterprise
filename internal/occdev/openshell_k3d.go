@@ -93,6 +93,9 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 			return fmt.Errorf("browser, development API, and Kubernetes API ports must differ")
 		}
 	}
+	if signIn == developmentSignInKeycloak && (browserPort == developmentKeycloakHostPort || apiPort == developmentKeycloakHostPort || kubernetesPort == developmentKeycloakHostPort) {
+		return fmt.Errorf("port 443 is reserved for Keycloak; browser, development API, and Kubernetes API ports must use other ports")
+	}
 	threshold, err := positiveSetting(r, "OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT", 5, 20)
 	if err != nil {
 		return err

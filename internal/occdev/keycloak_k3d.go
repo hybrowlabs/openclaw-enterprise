@@ -22,7 +22,7 @@ import (
 )
 
 // OCC_DEVELOPMENT_SIGN_IN=keycloak runs a persistent Keycloak beside the
-// routing-enabled Kubernetes-only profile (RFC-0059). This file owns the
+// routing-enabled Kubernetes-only profile (RFC-0019). This file owns the
 // Keycloak workload, its name, TLS and host publication; OCE sign-in is not
 // wired to it yet.
 const (
