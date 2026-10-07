@@ -87,11 +87,11 @@ desired state, queues work and, through the API, appends the deploy audit event.
 
 **Grant.** After the revision row is written, in the same unit of work:
 
-1. If the caller can already read the new revision (for example the bootstrap
-   administrator's Installation-wide Role), stop. No grant is written.
-2. If the selected IAM Driver keeps policy outside platform State
+1. If the selected IAM Driver keeps policy outside platform State
    (`namespacePolicyTransaction` is not `platform-unit-of-work`), stop. OCC never
    writes policy around an external IAM Driver.
+2. If the caller can already read the new revision (for example the bootstrap
+   administrator's Installation-wide Role), stop. No grant is written.
 3. Ensure the Namespace Role `role_<namespaceId>_deployed_revision_read`, named
    "Deployed revision read", with exactly `agent_revision:read`. It is created on
    first use and then reused; Roles are immutable, and a Role with that ID but
@@ -107,9 +107,10 @@ desired state, queues work and, through the API, appends the deploy audit event.
 **Audit.** The deploy event lists the binding in `details.grantedAccessBindings`,
 with the same fields as `removedAccessBindings` (ID, subject, Role, target). The
 provisioning handoff checkpoint event does the same when provisioning deploys.
-The list is omitted when no grant was written, whether the caller already read
-the revision or could not hold the binding. An audit failure rolls back the grant
-with the revision.
+When no grant was written, the list is omitted and
+`details.revisionReadGrantSkipped` says why: `external-iam-policy` (step 1),
+`already-readable` (step 2) or `subject-not-bindable` (step 5). An audit failure
+rolls back the grant with the revision.
 
 **Lifecycle.** Revisions are deleted only when their Agent is deleted. The Agent
 deletion finalizer already removes bindings that target the Agent's revisions,
@@ -156,10 +157,12 @@ Required outcomes and evidence (#1605):
   one she can list; she cannot read an administrator's earlier revision; a sharee
   cannot read hers; the event names the binding (PostgreSQL integration test,
   fails on main).
-- An administrator's deploy writes no grant; repeated deploys reuse one Role.
+- An administrator's deploy writes no grant and its event says
+  `already-readable`; repeated deploys reuse one Role.
 - Agent deletion lists the grants among the bindings it removes.
-- An Installation-scoped ServicePrincipal deploys without a grant and leaves no
-  Role behind.
+- An Installation-scoped ServicePrincipal deploys without a grant
+  (`subject-not-bindable`) and leaves no Role behind; an IAM Driver that keeps
+  policy outside platform State gets none (`external-iam-policy`).
 
 Not yet verified: a live install. The provisioning path is covered by code
 review only, because provisioning requires Namespace-wide `create`, which only
