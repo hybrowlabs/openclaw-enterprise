@@ -265,8 +265,8 @@ export interface CredentialSourceReference extends ResourceRef {
   readonly namespaceId: string;
 }
 
-/** Login modes a Harness can use when its model credential arrives from a source. */
-export type CredentialSourceLoginMode = "api_key";
+/** Source-backed login modes; `chatgptAuthTokens` requires a dedicated Codex Harness. */
+export type CredentialSourceLoginMode = "api_key" | "chatgptAuthTokens";
 
 export interface CredentialSourceFieldSpec {
   readonly name: string;
@@ -970,7 +970,7 @@ export interface SandboxWorkloadIdentity {
 }
 
 export interface HarnessWorkloadRequirements {
-  readonly loginMode: HarnessAuthBinding["method"];
+  readonly loginMode: HarnessAuthBinding["method"] | CredentialSourceLoginMode;
   readonly image: string;
   readonly command: readonly string[];
   /** Optional identity that a Sandbox must preserve in full or reject before provisioning. */
@@ -1197,10 +1197,23 @@ export interface CredentialWithdrawalContext extends CredentialGatewayContext {
   readonly sourceId: string;
 }
 
-/** Opaque grant that only the paired SandboxDriver can consume. */
+/** Selected identity metadata owned by the trusted Credential Gateway, never caller claims. */
+export interface ExternalChatgptAuth {
+  /** Placeholder only: copy unchanged for the paired Sandbox to resolve; never a real token. */
+  readonly accessTokenPlaceholder: string;
+  readonly accountId: string;
+  readonly planType: string;
+  readonly userId?: string;
+  readonly email?: string;
+  readonly isFedramp?: boolean;
+}
+
+/** Gateway attachment whose opaque grant ref only the paired SandboxDriver consumes. */
 export interface CredentialSourceAttachment {
   readonly sourceId: string;
   readonly ref: string;
+  /** External Codex authentication carries no refresh token into the workload. */
+  readonly externalChatgptAuth?: ExternalChatgptAuth;
 }
 
 export interface CredentialAttachmentStatus {

@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: 2026-10-01
-last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
+updated: 2026-10-07
+last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
 # Credential source lifecycle Flow
@@ -14,8 +14,8 @@ update its value or withdraw it from one running Agent, and later deletes the
 source. The API copies the Secret value into the gateway at registration and
 again on each update; OCC stores only metadata and Secret references. Admission
 freezes the source identity in the AgentRevision, and the worker hands the live
-source record to Kubernetes Compute. This flow stops when Compute receives the
-resolved source; the
+source record to Kubernetes Compute. This flow covers the external ChatGPT
+metadata handoff into Codex; the
 [OpenShell Sandbox provisioning flow](openshell-sandbox-provisioning.md) covers
 attachment, provisioning, and attachment readiness.
 
@@ -49,6 +49,11 @@ graph TD
   H --> I{"<b>Worker dispatch</b><br/>grants and live record"}
   I -- "mismatch or unavailable" --> W["<b>Permanent failure</b><br/>Revision stays inactive"]
   I -- "ready" --> J["<b>Compute receives source</b><br/>Attachment handoff"]
+  J --> P{"<b>Source login mode</b>"}
+  P -- "api_key" --> Q["<b>Sandbox provisions Harness</b><br/>API-key placeholder"]
+  P -. "chatgptAuthTokens: external Driver required" .-> T["<b>Driver supplies attachment</b><br/>Placeholder and account metadata"]
+  T --> U["<b>Codex entrypoint</b><br/>Ephemeral external-mode auth.json"]
+  U --> V["<b>Native model probe</b><br/>Then app-server startup"]
   E --> K["<b>DELETE</b><br/>refused while referenced"]
   K --> L["<b>Mark deleting</b><br/>then removeSource"]
   L -- "gateway failure" --> M["<b>503</b><br/>Record stays deleting"]
@@ -138,8 +143,10 @@ declare `harnessAuth`. The frozen snapshot is `{ method, sourceId,
 credentialGatewayId, sourceType, loginMode }`. `admittedCredentialSourceType`
 requires a selected Sandbox, and Compute `validateHarnessAuth` requires
 a dedicated Codex or native OpenClaw Harness, the paired Sandbox and gateway,
-and an `openai`/`api_key` type. Compute renders no model Secret for either
-Harness and passes the resolved source to Sandbox provisioning.
+and an `openai`/`api_key` type. Dedicated Codex also accepts an
+`openai`/`chatgptAuthTokens` type from a Driver implementing the external-auth
+contract. Compute renders no model Secret for either Harness and passes the
+resolved source to Sandbox provisioning.
 
 ### 6. Resolve the source at dispatch
 
@@ -154,6 +161,24 @@ missing or `deleting` source, or one whose Driver or type differs, returns
 `HARNESS_AUTH_SOURCE_UNAVAILABLE`. Otherwise it passes the snapshot plus the
 record to Compute, which rechecks the match in `harnessAuthForRevision`. The
 next owner is the [OpenShell Sandbox provisioning flow](openshell-sandbox-provisioning.md#2-derive-the-provider-owned-harness-request).
+
+For `chatgptAuthTokens`, the Credential Gateway's `attachForRevision` supplies
+the placeholder and authenticated account metadata described in the
+[external-auth contract](../reference/drivers/credential-gateway.md#external-chatgpt-authentication).
+Compute's
+`apps/controller/src/drivers/compute/kubernetes/index.ts:credentialSourceEnvironment`
+passes them as `CODEX_ACCESS_TOKEN` and `OCE_CODEX_CHATGPT_ACCOUNT` in the
+Harness requirements. The native entrypoint in
+`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts`
+writes an ephemeral `auth.json` in external-token mode before its existing
+native model probe and app-server startup. Native Codex receives no refresh
+token and does not own refresh in this mode. The access-token placeholder is
+preserved verbatim for the paired Sandbox's injector.
+
+This receiving path depends on a Driver and external service providing the
+OAuth source, refresh, and injection. The bundled OpenShell catalog still
+provides only API-key authentication. It does not convert existing Experimental
+OAuth bindings or transfer their persistent refresh credentials.
 
 ### 7. Delete the source
 
@@ -284,6 +309,7 @@ than re-attach the source.
 
 ## Changelog
 
+- 2026-10-07 00:22: Documented the external ChatGPT placeholder and account-metadata handoff into native Codex in the accompanying change. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - ca0df6314ddddabc2f039de791f35c2e5de7ec43)
 - 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
 - 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
 - 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)

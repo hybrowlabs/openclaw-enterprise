@@ -1625,6 +1625,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
+      [48, "preExternalChatgptAuth"],
     ]) {
       void context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1650,6 +1651,60 @@ test(
         );
       });
     }
+  },
+);
+
+test(
+  "External ChatGPT migration admits source snapshots without admitting credential values",
+  requiresHistoryPostgres,
+  async (context) => {
+    const fixture = await migrationHistoryFixture();
+    const db = await historyDatabase(context, fixture, "externalchatgpt", { prefix: 48 });
+    const namespaceId = await seedCanonicalData(db);
+    const sourceId = `cs_${randomUUID()}`;
+    await db.app.query(
+      `INSERT INTO occ.credential_sources(id,namespace_id,name,type,config,driver_id,state,created_at)
+       VALUES($1,$2,'External ChatGPT','chatgpt','{}','external-gateway','ready',now())`,
+      [sourceId, namespaceId],
+    );
+    const binding = {
+      method: "credential_source",
+      sourceId,
+      credentialGatewayId: "external-gateway",
+      sourceType: "chatgpt",
+      loginMode: "chatgptAuthTokens",
+    };
+    let revisionNumber = 2;
+    const insertSnapshot = (auth) =>
+      db.app.query(
+        `INSERT INTO occ.agent_revisions(id,namespace_id,agent_id,revision_number,admitted_spec,backend_id,admitted_at)
+         SELECT $2,namespace_id,agent_id,$3,
+           jsonb_set(admitted_spec,'{harness_auth}',$4::jsonb) || '{"sandbox_driver_id":"external-sandbox"}'::jsonb,
+           backend_id,now()
+         FROM occ.agent_revisions WHERE namespace_id=$1 AND revision_number=1
+         RETURNING admitted_spec->'harness_auth' AS auth`,
+        [namespaceId, `rev_${randomUUID()}`, revisionNumber++, JSON.stringify(auth)],
+      );
+    const invalidSnapshot = (error) =>
+      error.code === "23514" && error.constraint === "agent_revisions_admitted_snapshot";
+
+    // Exercise the actual old CHECK constraint first, not the application validator.
+    await assert.rejects(insertSnapshot(binding), invalidSnapshot);
+    const receipts = await historyReceipts(db.migrator);
+    assert.deepEqual(await runHistoryMigration(db), {
+      ok: true,
+      history: "preExternalChatgptAuth",
+    });
+    await assertCompletedHistory(db, receipts);
+    assert.deepEqual((await insertSnapshot(binding)).rows, [{ auth: binding }]);
+    const apiKey = { ...binding, loginMode: "api_key" };
+    assert.deepEqual((await insertSnapshot(apiKey)).rows, [{ auth: apiKey }]);
+    // Only the admitted mode expands: unknown modes and credential payloads remain invalid.
+    await assert.rejects(insertSnapshot({ ...binding, loginMode: "unknown" }), invalidSnapshot);
+    await assert.rejects(
+      insertSnapshot({ ...binding, accessTokenPlaceholder: "synthetic-placeholder" }),
+      invalidSnapshot,
+    );
   },
 );
 
@@ -1880,6 +1935,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
+      [48, "preExternalChatgptAuth"],
     ]) {
       void context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1955,7 +2011,8 @@ test(
       [44, "preBrokerReceiptFence"],
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
-      // Prefix 47 is omitted: 0048 only updates rows, so it has no DDL for the trigger to abort.
+      [47, "preAdministratorCredentialSourceGrants"],
+      [48, "preExternalChatgptAuth"],
     ]) {
       void context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
@@ -1970,7 +2027,7 @@ test(
           db,
           db.name,
           `CREATE FUNCTION public.reject_migration_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration rollback fixture' USING ERRCODE='55000'; END $$;
-        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 41 ? "ALTER TABLE" : prefix >= 38 ? "CREATE FUNCTION" : prefix >= 36 ? "CREATE INDEX" : prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
+        CREATE EVENT TRIGGER reject_migration_ddl ON ddl_command_start WHEN TAG IN ('${prefix >= 47 ? "CREATE FUNCTION" : prefix >= 41 ? "ALTER TABLE" : prefix >= 38 ? "CREATE FUNCTION" : prefix >= 36 ? "CREATE INDEX" : prefix >= 31 ? "ALTER TABLE" : prefix >= 27 ? "CREATE FUNCTION" : "ALTER FUNCTION"}') EXECUTE FUNCTION public.reject_migration_ddl()`,
         );
         assert.deepEqual(await runHistoryMigration(db), { ok: false, code: "MIGRATION_FAILED" });
         assert.deepEqual(await historyReceipts(db.migrator), before.receipts);

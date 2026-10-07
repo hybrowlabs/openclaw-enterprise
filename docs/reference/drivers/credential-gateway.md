@@ -48,7 +48,41 @@ A `CredentialSourceType` declares:
   are supplied as OCC Secret references.
 - `rotation`: `none`, `external`, or `gateway`.
 - `harnessAuth`: optional `{ modelProvider, loginMode }`. Only a type with this
-  entry can authenticate a Harness. The current login mode is `api_key`.
+  entry can authenticate a Harness. Login modes are `api_key` and, for dedicated
+  Codex, `chatgptAuthTokens`.
+
+### External ChatGPT authentication
+
+The `chatgptAuthTokens` mode receives externally managed ChatGPT authentication
+through a credential source. It is a receiving contract for a Credential
+Gateway and paired Sandbox that already provide OAuth token injection. The
+bundled OpenShell catalog does not yet offer this source type.
+
+For an `openai`/`chatgptAuthTokens` source, `attachForRevision` must return
+`externalChatgptAuth` on the source's attachment: `accessTokenPlaceholder`,
+`accountId`, `planType`, and optional `userId`, `email`, and `isFedramp`. The
+trusted Driver supplies account metadata from the authenticated connection;
+these fields are not caller-selected Agent configuration. The placeholder must
+be the exact value recognized by the egress injector. Real access tokens,
+refresh tokens, and the original ID token stay outside the Harness.
+
+Compute passes the placeholder and account metadata to the dedicated Codex
+entrypoint. It writes an ephemeral `auth.json` with
+`auth_mode: "chatgptAuthTokens"`, the unchanged access-token placeholder, an
+empty refresh token, and a synthetic ID-token payload containing the account
+metadata. Native Codex uses that metadata for account identity, plan and
+workspace decisions. This external mode does not run native OAuth refresh;
+the existing native model probe must still succeed before app-server starts.
+
+The external credential service owns refresh and the gateway owns injection
+for inference, hosted app/MCP, and authenticated account/configuration requests.
+Metadata is projected at provisioning; live metadata updates and reconnect
+delivery are not implemented here. Native user-identity checks that depend on
+access-token claims are not established with an opaque placeholder.
+
+This mode does not change the Experimental `oauth` binding, whose native Codex
+runtime retains refresh ownership on
+[private persistent storage](kubernetes-compute/codex-oauth-storage.md).
 
 ### Optional additions
 
@@ -139,8 +173,11 @@ adopt or delete the same stored copy.
 - OCC has no rotate operation, because no delivered source type uses gateway
   refresh. Update pushes new static values; running Agents use them after a
   redeploy.
-- Compute accepts a credential source only for dedicated Codex with a source
-  type whose `harnessAuth` is `openai`/`api_key`.
+- Compute accepts `openai`/`api_key` credential sources for dedicated Codex or
+  native OpenClaw. `openai`/`chatgptAuthTokens` is dedicated-Codex-only and
+  requires the external-auth attachment described above. The bundled catalog
+  still exposes only static API-key sources; this contract does not implement
+  an OAuth Token Service, OAuth source Driver, or token injection.
 - Guided Agent provisioning rejects credential-source Harness authentication.
   Create the Agent, then deploy it.
 - Installed Credential Gateway packages are unsupported.

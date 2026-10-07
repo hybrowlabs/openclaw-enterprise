@@ -21,6 +21,29 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const scenario = fs.readFileSync("/fixture/scenario", "utf8");
 fs.appendFileSync("/home/node/calls", JSON.stringify(args) + "\n");
+if (scenario === "external") {
+  // Inspect the actual launcher's output at both native process boundaries.
+  assert.equal(args.includes("login"), false);
+  assert.equal(process.env.CODEX_ACCESS_TOKEN, undefined);
+  assert.equal(process.env.OCE_CODEX_CHATGPT_ACCOUNT, undefined);
+  assert.ok(args.includes("cli_auth_credentials_store=file"));
+  const path = process.env.CODEX_HOME + "/auth.json";
+  const auth = JSON.parse(fs.readFileSync(path, "utf8"));
+  assert.equal(auth.auth_mode, "chatgptAuthTokens");
+  assert.equal(auth.tokens.access_token, "opaque-gateway-placeholder");
+  assert.equal(auth.tokens.refresh_token, "");
+  assert.equal(auth.tokens.account_id, "account-workspace");
+  assert.ok(Number.isFinite(Date.parse(auth.last_refresh)));
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600);
+  const claims = JSON.parse(Buffer.from(auth.tokens.id_token.split(".")[1], "base64url"));
+  assert.equal(claims.email, "fixture@example.invalid");
+  assert.deepEqual(claims["https://api.openai.com/auth"], {
+    chatgpt_account_id: "account-workspace",
+    chatgpt_plan_type: "business",
+    chatgpt_user_id: "fixture-user",
+    chatgpt_account_is_fedramp: false,
+  });
+}
 if (args.includes("login")) {
   assert.equal(Object.hasOwn(process.env, "APP_SERVER_TOKEN"), false);
   process.stdin.resume();
@@ -62,7 +85,12 @@ if (args.includes("login")) {
 }
 `;
 
-async function startLauncher(t, scenario, stopAfterTimeout = false) {
+async function startLauncher(
+  t,
+  scenario,
+  stopAfterTimeout = false,
+  auth = { CODEX_LOGIN_MODE: "api_key", OPENAI_API_KEY: "credential-canary" },
+) {
   const directory = await mkdtemp(join(tmpdir(), "oce-codex-probe-"));
   const name = `oce-codex-probe-${randomUUID()}`;
   let output = "";
@@ -107,10 +135,7 @@ async function startLauncher(t, scenario, stopAfterTimeout = false) {
       "CODEX_HOME=/home/node/codex",
       "-e",
       "OPENCLAW_WORKSPACE_DIR=/home/node/workspace",
-      "-e",
-      "CODEX_LOGIN_MODE=api_key",
-      "-e",
-      "OPENAI_API_KEY=credential-canary",
+      ...Object.entries(auth).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
       "-e",
       "OPENCLAW_HARNESS_MODEL=codex/fixture-model",
       "-e",
@@ -167,7 +192,7 @@ async function startLauncher(t, scenario, stopAfterTimeout = false) {
         const fs = require('node:fs');
         fetch('http://127.0.0.1:18791/openclaw/runtime/status').then(async response => {
           console.log(JSON.stringify({ status: await response.json(), ready: fs.existsSync('/home/node/ready'),
-            calls: fs.readFileSync('/home/node/calls', 'utf8').trim().split('\\n').map(JSON.parse),
+            calls: fs.readFileSync('/home/node/calls', 'utf8').trim().split('\\n').filter(Boolean).map(JSON.parse),
             probeDirectories: fs.readdirSync('/tmp').filter(name => name.startsWith('codex-auth-probe-')) }));
         });
       `,
@@ -189,6 +214,49 @@ async function waitFor(check, diagnostics) {
   }
   assert.fail(`Launcher did not settle: ${diagnostics()}`);
 }
+
+test(
+  "generated Codex launcher hands external ChatGPT auth to the probe and app-server",
+  {
+    skip: image ? false : "Set OCC_TEST_CODEX_PROBE_IMAGE to an immutable Node 24+ image.",
+    timeout: 90000,
+  },
+  async (t) => {
+    assert.match(image, /^(?:sha256:[a-f0-9]{64}|.+@sha256:[a-f0-9]{64})$/);
+    const auth = {
+      CODEX_LOGIN_MODE: "chatgptAuthTokens",
+      CODEX_ACCESS_TOKEN: "opaque-gateway-placeholder",
+      OCE_CODEX_CHATGPT_ACCOUNT: JSON.stringify({
+        accountId: "account-workspace",
+        planType: "business",
+        userId: "fixture-user",
+        email: "fixture@example.invalid",
+      }),
+    };
+    const launcher = await startLauncher(t, "external", false, auth);
+    await waitFor(() => launcher.output().includes("APP_SERVER_STARTED"), launcher.errors);
+    const snapshot = await launcher.snapshot();
+    assert.equal(snapshot.ready, true);
+    assert.equal(snapshot.calls.length, 2);
+    assert.ok(snapshot.calls[0].includes("exec"));
+    assert.ok(snapshot.calls[1].includes("app-server"));
+    assert.doesNotMatch(launcher.output() + launcher.errors(), /opaque-gateway-placeholder/);
+
+    // Incomplete metadata must stop before any native process or readiness.
+    const invalid = await startLauncher(t, "external", false, {
+      ...auth,
+      OCE_CODEX_CHATGPT_ACCOUNT: JSON.stringify({ accountId: "account-workspace" }),
+    });
+    await waitFor(
+      () => invalid.errors().includes("Harness model authentication probe failed."),
+      invalid.errors,
+    );
+    const failed = await invalid.snapshot();
+    assert.equal(failed.ready, false);
+    assert.equal(failed.status.runtimeFailure.code, "LOGIN_FAILED");
+    assert.deepEqual(failed.calls, []);
+  },
+);
 
 test(
   "generated Codex launcher bounds model-probe recovery",

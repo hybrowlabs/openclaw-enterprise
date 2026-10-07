@@ -3024,7 +3024,11 @@ const loginMode = process.env.CODEX_LOGIN_MODE;
 const apiKey = process.env.OPENAI_API_KEY;
 const accessToken = process.env.CODEX_ACCESS_TOKEN;
 const workspaceId = process.env.CODEX_CHATGPT_WORKSPACE_ID;
+const externalAccount = process.env.OCE_CODEX_CHATGPT_ACCOUNT;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
+if (loginMode !== "chatgptAuthTokens" && externalAccount !== undefined) {
+  throw new Error("External ChatGPT metadata requires external authentication.");
+}
 if (loginMode === "api_key") {
   if (!nonempty(apiKey) || accessToken !== undefined || workspaceId !== undefined) {
     throw new Error("Codex API-key authentication configuration is invalid.");
@@ -3040,6 +3044,10 @@ if (loginMode === "api_key") {
 } else if (loginMode === "oauth") {
   if (apiKey !== undefined || accessToken !== undefined || workspaceId !== undefined) {
     throw new Error("Codex OAuth authentication configuration is invalid.");
+  }
+} else if (loginMode === "chatgptAuthTokens") {
+  if (!nonempty(accessToken) || !nonempty(externalAccount) || apiKey !== undefined || workspaceId !== undefined) {
+    throw new Error("Codex external authentication configuration is invalid.");
   }
 } else {
   throw new Error("Codex authentication mode is missing or unsupported.");
@@ -3084,7 +3092,50 @@ function codexAuthenticationRejected(message) {
 }
 const loginStartedAt = Date.now();
 let login;
-if (loginMode === "oauth") {
+if (loginMode === "chatgptAuthTokens") {
+  let temporary;
+  try {
+    const fs = require("node:fs");
+    const account = JSON.parse(externalAccount);
+    if (!account || !nonempty(account.accountId) || !nonempty(account.planType) ||
+        (account.email !== undefined && !nonempty(account.email)) ||
+        (account.userId !== undefined && !nonempty(account.userId)) ||
+        (account.isFedramp !== undefined && typeof account.isFedramp !== "boolean")) {
+      throw new Error("Invalid external account metadata.");
+    }
+    // The trusted egress layer owns the real tokens. This JWT carries local metadata only;
+    // keep its access placeholder byte-for-byte so the provider can recognize and replace it.
+    const claims = {
+      email: account.email,
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: account.accountId,
+        chatgpt_plan_type: account.planType,
+        chatgpt_user_id: account.userId,
+        chatgpt_account_is_fedramp: account.isFedramp ?? false,
+      },
+    };
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const auth = {
+      auth_mode: "chatgptAuthTokens",
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: encode({ alg: "none", typ: "JWT" }) + "." + encode(claims) + ".placeholder",
+        access_token: accessToken,
+        refresh_token: "",
+        account_id: account.accountId,
+      },
+      last_refresh: new Date().toISOString(),
+    };
+    temporary = mkdtempSync(process.env.CODEX_HOME + "/.external-auth-");
+    fs.writeFileSync(temporary + "/auth.json", JSON.stringify(auth), { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary + "/auth.json", process.env.CODEX_HOME + "/auth.json");
+    login = { status: 0 };
+  } catch {
+    login = { status: 1 };
+  } finally {
+    if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
+  }
+} else if (loginMode === "oauth") {
   try {
     const fs = require("node:fs");
     const receipt = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/.oce-oauth.json", "utf8"));
@@ -3125,6 +3176,7 @@ if (login.status !== 0 || login.error) {
 delete process.env.CODEX_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
 delete process.env.CODEX_CHATGPT_WORKSPACE_ID;
+delete process.env.OCE_CODEX_CHATGPT_ACCOUNT;
 
 // Codex reports an in-turn stream retry as a top-level error before retrying the
 // same sampling request. Only that exact transient shape, within Codex's small
@@ -3327,7 +3379,7 @@ const child = spawn(
     "shell_environment_policy.experimental_use_profile=false",
     "-c",
     "shell_environment_policy.set.PATH=" + JSON.stringify(process.env.PATH ?? ""),
-    ...(loginMode === "oauth" ? ["-c", "cli_auth_credentials_store=file"] : []),
+    ...(["oauth", "chatgptAuthTokens"].includes(loginMode) ? ["-c", "cli_auth_credentials_store=file"] : []),
     "app-server",
     "--listen",
     "ws://0.0.0.0:" + process.env.APP_SERVER_PORT,

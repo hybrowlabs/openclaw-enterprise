@@ -832,7 +832,7 @@ interface RuntimeCredentialContext {
 }
 
 interface PreparedHarnessAuth {
-  readonly loginMode: HarnessAuthSnapshot["method"];
+  readonly loginMode: HarnessWorkloadRequirements["loginMode"];
   readonly environment: readonly V1EnvVar[];
   /** Present when the Credential Gateway, not a Secret projection, supplies the credential. */
   readonly credentialSource?: Readonly<CredentialSource>;
@@ -2737,11 +2737,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         this.credentialGatewayDriver === undefined ||
         auth.credentialGatewayId !== this.credentialGatewayDriver.id ||
         credentialSourceType?.type !== auth.sourceType ||
-        credentialSourceType.harnessAuth?.loginMode !== "api_key" ||
-        credentialSourceType.harnessAuth.modelProvider !== "openai"
+        credentialSourceType.harnessAuth?.loginMode !== auth.loginMode ||
+        credentialSourceType.harnessAuth.modelProvider !== "openai" ||
+        (auth.loginMode !== "api_key" &&
+          !(auth.loginMode === "chatgptAuthTokens" && harness.id === "codex"))
       ) {
         throw new ConfigurationFailure(
-          "Credential-source Harness authentication requires the paired Sandbox and an OpenAI API key source.",
+          "Credential-source Harness authentication requires paired Drivers and a matching supported OpenAI login mode.",
         );
       }
     }
@@ -4640,12 +4642,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
           credentialContext === undefined
             ? []
             : await this.requireCredentialGateway().attachForRevision(credentialContext);
-        const requirements = this.harnessRequirementsFromDeployment(
+        const renderedRequirements = this.harnessRequirementsFromDeployment(
           agentDeployment,
           harnessAuth.loginMode,
           attachments,
           this.sandboxWorkloadFiles(pluginRuntime),
         );
+        const requirements = {
+          ...renderedRequirements,
+          environment: [
+            ...renderedRequirements.environment,
+            ...this.credentialSourceEnvironment(revision, attachments),
+          ],
+        };
         const sandbox = await this.prepareRevisionStage("sandbox_provision", () =>
           sandboxDriver.provisionHarness!({
             ...sandboxContext,
@@ -7767,6 +7776,64 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
     }
     return this.credentialGatewayDriver;
+  }
+
+  /** Only the trusted Gateway attachment supplies external account metadata and placeholders. */
+  private credentialSourceEnvironment(
+    revision: AgentRevision,
+    attachments: readonly CredentialSourceAttachment[],
+  ): readonly SandboxEnvironmentVariable[] {
+    if (revision.harnessAuth.method !== "credential_source") {
+      return [];
+    }
+    if (attachments.length !== 1 || attachments[0]?.sourceId !== revision.harnessAuth.sourceId) {
+      throw new ConfigurationFailure("The Credential Gateway must attach the exact bound source.");
+    }
+    const auth = attachments[0].externalChatgptAuth;
+    if (revision.harnessAuth.loginMode !== "chatgptAuthTokens") {
+      if (auth !== undefined) {
+        throw new ConfigurationFailure(
+          "External ChatGPT metadata does not match the admitted login mode.",
+        );
+      }
+      return [];
+    }
+    const record = asRecord(auth);
+    const text = (value: unknown): value is string =>
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      value.length <= 8192 &&
+      !/\p{Cc}/u.test(value);
+    if (
+      record === undefined ||
+      Object.keys(record).some(
+        (key) =>
+          ![
+            "accessTokenPlaceholder",
+            "accountId",
+            "planType",
+            "userId",
+            "email",
+            "isFedramp",
+          ].includes(key),
+      ) ||
+      !text(record.accessTokenPlaceholder) ||
+      !text(record.accountId) ||
+      !text(record.planType) ||
+      (record.userId !== undefined && !text(record.userId)) ||
+      (record.email !== undefined && !text(record.email)) ||
+      (record.isFedramp !== undefined && typeof record.isFedramp !== "boolean")
+    ) {
+      throw new ConfigurationFailure(
+        "The Credential Gateway returned invalid external ChatGPT authentication.",
+      );
+    }
+    const { accessTokenPlaceholder, ...account } = record;
+    return [
+      // Preserve the exact placeholder: the egress provider owns its matching/replacement format.
+      { name: "CODEX_ACCESS_TOKEN", value: accessTokenPlaceholder },
+      { name: "OCE_CODEX_CHATGPT_ACCOUNT", value: JSON.stringify(account) },
+    ];
   }
 
   private harnessRequirementsFromDeployment(

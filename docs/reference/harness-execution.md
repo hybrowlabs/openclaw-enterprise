@@ -106,10 +106,13 @@ A selected Sandbox uses only Compute's
 
 A [`credential_source`](credential-sources.md) binding requires a selected
 Credential Gateway, the paired OpenShell Sandbox, a dedicated Codex or native
-OpenClaw Harness, and a source type whose Harness authentication is OpenAI
-`api_key`. Compute projects no model Secret, passes the gateway's attachments
-to the Sandbox, and for Codex sets `CODEX_LOGIN_MODE=api_key`. The revision
-activates only after every attachment is `ready`.
+OpenClaw Harness, and a compatible source type. The bundled catalog exposes
+OpenAI `api_key` authentication. Dedicated Codex also accepts the
+[external ChatGPT authentication contract](drivers/credential-gateway.md#external-chatgpt-authentication)
+from a Driver providing `chatgptAuthTokens` attachments; that OAuth source and
+its token injection are not yet bundled. Compute projects no model Secret and
+passes the gateway's attachments to the Sandbox. The revision activates only
+after every attachment is `ready`.
 While a Credential Gateway is selected, deployment rejects the Secret-backed and
 account methods with `409`. Other Compute
 implementations reject bindings they do not support. SSH embedded OpenClaw accepts
