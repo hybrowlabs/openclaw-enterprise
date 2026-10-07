@@ -1625,6 +1625,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
+      [48, "preCliSessions"],
     ]) {
       void context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1880,6 +1881,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
+      [48, "preCliSessions"],
     ]) {
       void context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1956,6 +1958,7 @@ test(
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
       // Prefix 47 is omitted: 0048 only updates rows, so it has no DDL for the trigger to abort.
+      [48, "preCliSessions"],
     ]) {
       void context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
