@@ -8,10 +8,10 @@ status_note: "Retroactive record. Every decision below is already implemented on
 # Proposal: Human sign-in hardening
 
 - **ID:** RFC-0019
-- **Owner:** freeqaz (record). Auth design review: needed.
 - **Created:** 2026-10-01
-- **Last updated:** 2026-10-03
-- **Source baseline:** `main` at `521549dff`. Every symbol and number below was read there; rechecked at `04d01d02e`.
+- **Last updated:** 2026-10-07
+- **Source baseline:** `main` at `521549dff`. Every symbol and number below was read there; rechecked at `04d01d02e` and `bf67a4317`.
+- **RFC PR:** [#856](https://github.com/openclaw/openclaw-enterprise/pull/856)
 - **Related:** [RFC-0007](0007-human-federated-sign-in/index.md) owns GitHub sign-in, the attempt,
   receipt and session-key design, and the original sign-in admission section, which this record
   supersedes for password and external sign-in. [RFC-0001](0001-oidc-sign-in.md) owns generic OIDC. Current
@@ -23,8 +23,8 @@ status_note: "Retroactive record. Every decision below is already implemented on
 ## Summary
 
 PRs merged between 2026-09-28 and 2026-10-01 changed how people sign in. Each was reviewed on
-its own; no human has reviewed the combined design. This record states what landed, why, and
-what it costs, so a reviewer can accept, change, or reopen it.
+its own; no human has reviewed the combined design, which needs an auth design review. This
+record states what landed, why, and what it costs, so a reviewer can accept, change, or reopen it.
 
 Password sign-in in both profiles uses one failure-counting limiter, keyed on email and (only
 behind a trusted proxy) client address. Spent budgets pace attempts instead of dropping them.
@@ -71,13 +71,17 @@ moved the external-provider profile's `/oce/password` onto it from attempt-count
   reveal whether the email exists or is reserved. Reserved means an Installation administrator
   (`passwordAdministrator`) or, with an external provider, the designated recovery account;
   under `recovery-only`, only the recovery account.
-- **Audit.** Password-only sign-ins write `authentication.login`; a wrong password or unknown
-  email is denied with `INVALID_CREDENTIALS` and no account. Audit writes fail closed (`503`).
-  A wrong password whose denial audit fails still counts as a failure (`DenialAuditUnavailable`,
-  `countsAsSignInFailure`), so an audit outage cannot open unlimited guessing
+- **Audit.** Every password sign-in whose password is checked writes `authentication.login`; a
+  wrong password or unknown email is denied with `INVALID_CREDENTIALS` and no account. Audit
+  writes fail closed, ordinarily with `503`. A wrong password whose denial audit fails still
+  counts as a failure (`DenialAuditUnavailable`, `countsAsSignInFailure`), so an audit outage
+  cannot open unlimited guessing
   ([#707](https://github.com/openclaw/openclaw-enterprise/pull/707) password-only,
   [#738](https://github.com/openclaw/openclaw-enterprise/pull/738) guarded, via
-  `refusePassword` and `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`).
+  `refusePassword` and `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`). That failure is `503` within the
+  budget and when a full table sends the attempt to the slow lane. Once a reserved account's
+  budget is spent, `slowLane` answers it like any other wrong password there:
+  `SignInRateLimited` (`429`).
 - **Visibility** (#695). Without a trusted proxy, startup logs
   `authentication.sign-in-limit-warning` (`TRUSTED_PROXY_NOT_CONFIGURED`) and Helm NOTES warn;
   nothing fails, since a source-preserving load balancer needs no proxy. The first slowed
@@ -146,13 +150,24 @@ RFC-0007 and RFC-0001 own the flow. These PRs tightened it:
   start apply the same gate. #647 also made the guarded adapter hide raw session rows from
   listing and counting.
 - **Denial codes** ([#636](https://github.com/openclaw/openclaw-enterprise/pull/636)):
-  callbacks audit `INVALID_ATTEMPT`, `PROVIDER_UNAVAILABLE` or `EXTERNAL_IDENTITY_REJECTED`.
+  callbacks audit `PROVIDER_UNAVAILABLE` or `EXTERNAL_IDENTITY_REJECTED`. #636 also audited
+  `INVALID_ATTEMPT`; since [#1228](https://github.com/openclaw/openclaw-enterprise/pull/1228),
+  a callback that matches no pending attempt writes no audit row and is counted in
+  `occ_sign_in_unmatched_callbacks_total`. Since
+  [#1202](https://github.com/openclaw/openclaw-enterprise/pull/1202), a token endpoint that
+  refuses the configured client is `PROVIDER_UNAVAILABLE` (`client_rejected`), not a rejected
+  identity.
 - **Provider removed or reconfigured**
   ([#797](https://github.com/openclaw/openclaw-enterprise/pull/797)):
   `PostgresHumanAuthentication.currentSession` checks, in its one query, that an external
   session's provider instance (client ID digest, plus issuer for OIDC) is in
   `externalProviderIds`; if not, it deletes the session and audits `authentication.session.end`
   (`PROVIDER_NOT_CONFIGURED`) once. Password sessions and client secret rotation are unaffected.
+- **GitHub membership** ([#1231](https://github.com/openclaw/openclaw-enterprise/pull/1231),
+  after this record's window): optional `OCC_AUTH_GITHUB_ALLOWED_ORGS` and
+  `OCC_AUTH_GITHUB_ALLOWED_TEAMS` refuse a GitHub callback before the account lookup, audited
+  `MEMBERSHIP_REQUIRED` or `MEMBERSHIP_UNAVAILABLE`. Its design is draft
+  [#1229](https://github.com/openclaw/openclaw-enterprise/pull/1229), not this record.
 
 ## Lockout and denial-of-service trade-offs
 
