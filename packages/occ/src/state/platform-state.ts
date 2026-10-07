@@ -2790,6 +2790,106 @@ function repositories(
   };
 }
 
+/**
+ * The memory counterpart of `occ.finalize_agent_deletion` (migrations/0035), applied to the
+ * records this adapter keeps. Returns false unless the Agent's deletion was admitted: it is
+ * `deleting`, stopped, and its `deleted` lifecycle work is recorded.
+ */
+function finalizeAgentDeletion(
+  snapshot: PlatformSnapshot,
+  namespaceId: string,
+  agentId: string,
+): boolean {
+  const work = snapshot.operations.find(
+    (operation) =>
+      operation.kind === "agent" &&
+      operation.target === "deleted" &&
+      operation.namespaceId === namespaceId &&
+      operation.resourceId === agentId,
+  );
+  const key = agentKey(namespaceId, agentId);
+  const agent = snapshot.agents.get(key);
+  if (
+    work === undefined ||
+    snapshot.namespaces.get(namespaceId) === undefined ||
+    agent === undefined ||
+    agent.status !== "deleting" ||
+    agent.desiredRuntimeState !== "stopped"
+  ) {
+    return false;
+  }
+  const installation = snapshot.installation;
+  if (installation === undefined) {
+    throw new ScopeViolationError("The server-owned Installation has not been initialized.");
+  }
+  const revisionIds = new Set((snapshot.revisions.get(key) ?? []).map((revision) => revision.id));
+
+  // Attempts outlive their revision as evidence (migrations/0035): completion detaches every
+  // attempt's live revision without waiting for repository cleanup, whatever its phase.
+  for (const [admissionId, attempt] of snapshot.repositorySessions) {
+    if (
+      attempt.namespaceId === namespaceId &&
+      attempt.agentId === agentId &&
+      attempt.liveRevisionId !== null
+    ) {
+      snapshot.repositorySessions.set(
+        admissionId,
+        immutableCopy({ ...attempt, liveRevisionId: null }),
+      );
+    }
+  }
+
+  // The finalizer's three AccessBinding groups: the Agent's ServicePrincipal as subject, the
+  // Agent as target, and the Agent's AgentRevisions as target. Like the SQL, the first two are
+  // not Namespace-scoped. Restrictions live in the IAM driver's seed here, not in this state.
+  for (const [bindingKey, binding] of snapshot.bindings) {
+    if (
+      (binding.subjectKind === "identity" && binding.subjectId === agent.servicePrincipalId) ||
+      (binding.resourceKind === "agent" && binding.resourceId === agentId) ||
+      (binding.resourceKind === "agent_revision" &&
+        binding.resourceId !== undefined &&
+        revisionIds.has(binding.resourceId))
+    ) {
+      snapshot.bindings.delete(bindingKey);
+    }
+  }
+
+  // The setup cascades with its Agent. Credential withdrawals already end with their revision
+  // here (liveWithdrawal), as the database cascade does.
+  snapshot.workspaceSetups.delete(key);
+  snapshot.revisions.delete(key);
+  snapshot.agents.delete(key);
+
+  snapshot.audit.push(
+    immutableCopy({
+      id: `aud_${crypto.randomUUID()}`,
+      installationId: installation.id,
+      namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "mutation" as const,
+      actorId: work.actorId,
+      source: "occ" as const,
+      action: "openclaw.agents.lifecycle.delete",
+      resource: { kind: "agent" as const, id: agentId, namespaceId },
+      outcome: "success" as const,
+      // Memory work is never claimed or retried, so its completion is the first attempt.
+      details: { reasonCode: "AGENT_DELETED", attemptCount: 1 },
+    }),
+  );
+
+  // The Agent's own lifecycle work and its revisions' work end with it.
+  const remaining = snapshot.operations.filter(
+    (operation) =>
+      operation.namespaceId !== namespaceId ||
+      !(
+        (operation.kind === "agent" && operation.resourceId === agentId) ||
+        (operation.kind === "agent_revision" && revisionIds.has(operation.resourceId))
+      ),
+  );
+  snapshot.operations.splice(0, snapshot.operations.length, ...remaining);
+  return true;
+}
+
 /** Process-local, single-writer state. No restart or multi-process durability. */
 export class InMemoryPlatformState implements PlatformStateStore {
   private snapshot: PlatformSnapshot = {
@@ -2844,6 +2944,25 @@ export class InMemoryPlatformState implements PlatformStateStore {
   }
 
   async transact<T>(work: (state: PlatformUnitOfWork) => Promise<T>): Promise<T> {
+    return this.commit((working, lifetime) =>
+      work(bindPlatformUnitOfWork(repositories(working, this.iamSubjects), lifetime)),
+    );
+  }
+
+  /**
+   * Completes an admitted Agent deletion the way the PostgreSQL worker's finalizer does
+   * (`PostgresWorkQueue.completeAgentDeletion`). Memory records lifecycle work but never
+   * executes it, so dev and test callers complete it here. Removes the Agent, its
+   * AgentRevisions and every AccessBinding the deletion audit listed, and records the
+   * `openclaw.agents.lifecycle.delete` success. Returns false when no deletion was admitted.
+   */
+  async completeAgentDeletion(namespaceId: string, agentId: string): Promise<boolean> {
+    return this.commit(async (working) => finalizeAgentDeletion(working, namespaceId, agentId));
+  }
+
+  private async commit<T>(
+    work: (working: PlatformSnapshot, lifetime: RepositoryTransactionLifetime) => Promise<T>,
+  ): Promise<T> {
     const previous = this.pending;
     let release: (() => void) | undefined;
     this.pending = new Promise<void>((resolve) => {
@@ -2854,9 +2973,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
       await previous;
       const working = cloneSnapshot(this.snapshot);
       const committedAuditCount = working.audit.length;
-      const result = await work(
-        bindPlatformUnitOfWork(repositories(working, this.iamSubjects), lifetime),
-      );
+      const result = await work(working, lifetime);
       await lifetime.finish();
       await this.publishAudit(working.audit.slice(committedAuditCount));
       this.snapshot = working;

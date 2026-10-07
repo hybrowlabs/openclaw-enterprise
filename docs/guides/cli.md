@@ -99,7 +99,7 @@ administrator gives CLI access to one Namespace by issuing a key for a Namespace
 you bind. With an administrator key file and `OCC_NAMESPACE` set:
 
 ```bash
-occ iam service-principal create -o json    # note data id: <service-principal-id>
+occ iam service-principal create -o json    # note its id: <service-principal-id>
 occ iam access-binding create --file binding.json
 occ service-key create --service-principal '<service-principal-id>' \
   --name nora-laptop --expires-in-days 30 --out nora-key.json
