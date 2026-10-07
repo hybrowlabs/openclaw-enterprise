@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type {
   AppsV1Api,
+  AuthorizationV1Api,
   CoreV1Api,
   DiscoveryV1Api,
   KubernetesObject,
@@ -230,6 +231,7 @@ interface KubernetesApiClients {
   readonly version: VersionApi;
   readonly core: CoreV1Api;
   readonly apps: AppsV1Api;
+  readonly authorization: AuthorizationV1Api;
   readonly discovery: DiscoveryV1Api;
   readonly networking: NetworkingV1Api;
   readonly objects: KubernetesObjectApi;
@@ -2584,6 +2586,127 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return { warnings };
   }
 
+  /**
+   * Upgrade-only check for the experimental two-cluster profile; startup does not run it.
+   * The openclaw-execution chart, a separate Helm release, holds the tenant grants this
+   * release needs. In every execution tenant Namespace where the calling identity holds its
+   * older tenant grant, SelfSubjectAccessReviews ask for the newer rules, so an execution
+   * chart left behind refuses the upgrade before anything stops. Namespaces without the
+   * older grant are not bound to this component and are skipped.
+   */
+  async verifyExecutionTenantGrants(
+    component: "api" | "worker",
+    { runtimeLogs }: { readonly runtimeLogs: boolean },
+  ): Promise<void> {
+    if (this.options.executionCluster === undefined) {
+      return;
+    }
+    type Rule = { readonly verb: string; readonly resource: string; readonly subresource?: string };
+    const bound: Rule =
+      component === "api"
+        ? { verb: "list", resource: "deployments" }
+        : { verb: "get", resource: "pods" };
+    const required: readonly Rule[] =
+      component === "api"
+        ? [
+            { verb: "get", resource: "pods" },
+            { verb: "list", resource: "pods" },
+            { verb: "get", resource: "pods", subresource: "proxy" },
+            ...(runtimeLogs
+              ? [
+                  { verb: "get", resource: "pods", subresource: "log" },
+                  { verb: "get", resource: "events" },
+                  { verb: "list", resource: "events" },
+                ]
+              : []),
+          ]
+        : [{ verb: "patch", resource: "pods" }];
+    const describe = (rule: Rule) =>
+      `${rule.verb} ${rule.resource}${rule.subresource === undefined ? "" : `/${rule.subresource}`}`;
+    const clients = await this.clients("execution");
+    const allowed = async (namespace: string, rule: Rule) => {
+      const review = await this.request(() =>
+        clients.authorization.createSelfSubjectAccessReview({
+          body: {
+            apiVersion: "authorization.k8s.io/v1",
+            kind: "SelfSubjectAccessReview",
+            spec: {
+              resourceAttributes: {
+                namespace,
+                verb: rule.verb,
+                group: rule.resource === "deployments" ? "apps" : "",
+                resource: rule.resource,
+                ...(rule.subresource === undefined ? {} : { subresource: rule.subresource }),
+              },
+            },
+          },
+        }),
+      );
+      if (review.status?.allowed === true) {
+        return true;
+      }
+      // A denial the authorizer could not evaluate is not proof of a missing grant.
+      if (isNonEmptyString(review.status?.evaluationError)) {
+        throw new Error(
+          `could not evaluate ${describe(rule)} in Namespace ${namespace}: ` +
+            review.status.evaluationError,
+        );
+      }
+      return false;
+    };
+    try {
+      // Read every page first: reviews between pages could outlive the continue token.
+      const names: string[] = [];
+      let continuation: string | undefined;
+      do {
+        const namespaces = await this.request(() =>
+          clients.core.listNamespace({
+            labelSelector: "openclaw.dev/namespace",
+            limit: 100,
+            ...(continuation === undefined ? {} : { _continue: continuation }),
+            timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+          }),
+        );
+        if (!Array.isArray(namespaces.items)) {
+          throw new Error("the Namespace list returned invalid data.");
+        }
+        for (const item of namespaces.items) {
+          if (isNonEmptyString(item.metadata?.name)) {
+            names.push(item.metadata.name);
+          }
+        }
+        continuation = namespaces.metadata?._continue || undefined;
+      } while (continuation !== undefined);
+      for (const namespace of names) {
+        if (!(await allowed(namespace, bound))) {
+          continue;
+        }
+        const missing: string[] = [];
+        for (const rule of required) {
+          if (!(await allowed(namespace, rule))) {
+            missing.push(describe(rule));
+          }
+        }
+        if (missing.length > 0) {
+          throw new ConfigurationFailure(
+            `The execution cluster's tenant ${component} grant in Namespace ${namespace} lacks ` +
+              `${missing.join(", ")}. Upgrade the openclaw-execution chart before this release.`,
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof ConfigurationFailure) {
+        throw error;
+      }
+      throw new Error(
+        `The execution cluster tenant grant review failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+  }
+
   validateRepositoryCredentialSupport(sandboxDriverId?: string): void {
     // TODO(two-cluster acceptance): qualify a routable, authenticated repository
     // credential endpoint before allowing this currently cluster-local service.
@@ -2679,6 +2802,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       (auth.method !== "api_key" &&
         auth.method !== "codex_pat" &&
         auth.method !== "credential_source") ||
+      (auth.method === "codex_pat" && !codex) ||
       (embedded && auth.method !== "api_key")
     ) {
       throw new ConfigurationFailure(
@@ -6958,6 +7082,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       version: new sdk.VersionApi(clientConfiguration),
       core: new sdk.CoreV1Api(clientConfiguration),
       apps: new sdk.AppsV1Api(clientConfiguration),
+      authorization: new sdk.AuthorizationV1Api(clientConfiguration),
       discovery: new sdk.DiscoveryV1Api(clientConfiguration),
       networking: new sdk.NetworkingV1Api(clientConfiguration),
       objects: new sdk.KubernetesObjectApi(clientConfiguration),

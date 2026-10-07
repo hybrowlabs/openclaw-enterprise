@@ -115,9 +115,11 @@ reference and Driver identity. For a ChatGPT account, it verifies the issued
 access-token reference and private Backend, member Driver, and workspace
 ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
 selected Compute validates the combination: SSH accepts only embedded OpenClaw
-with `runtime`; Kubernetes requires managed authentication. External ChatGPT sources require
-dedicated Codex and the paired Sandbox and Credential Gateway; unsupported
-bindings fail before predecessors stop.
+with `runtime`. Kubernetes `validateHarnessAuth` requires dedicated Codex for
+both imported and managed `codex_pat` sources. External ChatGPT sources require
+dedicated Codex and the paired Sandbox and Credential Gateway. Deployment and
+guided provisioning reject unsupported combinations before admitting work or
+stopping predecessors.
 
 Host credential changes can affect a runtime revision after restart without
 redeployment; see the
@@ -290,6 +292,7 @@ an external OAuth Driver and service; the bundled catalog offers API keys only.
 
 - 2026-10-07 16:05: Select Harness authentication by source ID and validate the complete credential attachment set. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 046c3d75e)
 
+- 2026-10-07 13:44: Reject imported and managed PAT bindings outside dedicated Codex during admission. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 09be9c241)
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 
 - 2026-10-07 17:36: Replace runtime-owned OAuth custody with source-owned device login and warm discovery; unify PAT sources. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - da984340ae4aafb03bb0c66bfd94ba40252625a5)

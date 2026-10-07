@@ -44,6 +44,7 @@
     "tests/integration/repository-credentials-projected-inputs.test.mjs",
     "tests/integration/ci-image-pull.test.mjs",
     "tests/conformance/slack-proxy-tunnel.test.mjs",
+    "tests/conformance/native-admin-websocket-relay.test.mjs",
     "tests/integration/repository-runtime-materialization.test.mjs",
     "tests/conformance/repository-credentials-contracts.test.mjs",
     "tests/integration/plugin-driver-startup.test.mjs",
@@ -197,6 +198,9 @@
     },
     {
       "path": "tests/conformance/slack-proxy-tunnel.test.mjs"
+    },
+    {
+      "path": "tests/conformance/native-admin-websocket-relay.test.mjs"
     },
     {
       "path": "tests/conformance/hosted-plugin-discovery.test.mjs"
