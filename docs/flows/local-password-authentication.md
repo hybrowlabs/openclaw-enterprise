@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-10-01
-last_updated_session: authoring-run/afd78df4-12de-4f41-b2df-7ebb53ed3213
+updated: 2026-10-06
+last_updated_session: authoring-run/8f5b1566-4538-437c-8e8a-fd2049050c6e
 ---
 
 # Bootstrap and human authentication flow
@@ -228,6 +228,13 @@ limits streamed response bytes; State bounds pending attempts and expired cleanu
 State persists the attempt and session deadlines; cookie Max-Age subtracts
 monotonic elapsed work from them, and expired completion cannot release a cookie.
 
+`scripts/auth-maintain.mjs` parses arguments with
+`scripts/lib/auth-maintain-arguments.mjs:parseAuthMaintainArguments` before
+configuration or database access. Undeclared commands, including inherited object
+properties, exit `64` with usage. The
+[maintenance procedure](../guides/deploy/auth-maintenance.md) lists supported operations
+and exit codes.
+
 Activation is a stopped-maintenance contract: admission stopped, requests
 drained or terminated, and every old controller stopped; startup does not fence
 an old live reader. Both PostgreSQL compositions reject
@@ -332,6 +339,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-06 07:30: Reject undeclared maintenance commands before configuration. (authoring-run/8f5b1566-4538-437c-8e8a-fd2049050c6e - 4bacc7925fcef75ea8715905a0c6c86abb7203d2)
 
 - 2026-10-04 21:00: Verify an existing Installation with SQL before loading Better Auth. (fix/bootstrap-fast-path)
 
