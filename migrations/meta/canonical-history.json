@@ -391,7 +391,7 @@
       "when": 1787000000049,
       "tag": "0049_cli_sessions",
       "breakpoints": true,
-      "sha256": "PENDING"
+      "sha256": "c37f5a3f8e167e71467292937cd04a8a21e935f6e89699e03ff97be786c95d93"
     }
   ],
   "initialSchemaStates": {
