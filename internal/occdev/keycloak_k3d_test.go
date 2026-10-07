@@ -537,7 +537,7 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 // assertChartValues proves the launcher sets only values the chart already
-// declares: RFC-0059 adds no chart surface.
+// declares: RFC-0019 adds no chart surface.
 func assertChartValues(t *testing.T, values map[string]any, key string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "deploy", "helm", "openclaw-enterprise", "values.yaml"))
