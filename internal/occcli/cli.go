@@ -1293,6 +1293,9 @@ func (app *application) runAgentLogs(command *cobra.Command, agentID string, opt
 	notices := command.ErrOrStderr()
 	revisionID, _, err := app.agentRevision(client, notices, namespace, agentID, options.revision)
 	if err != nil {
+		if options.follow && ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	cursor := ""

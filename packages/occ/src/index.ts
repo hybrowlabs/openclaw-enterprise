@@ -900,17 +900,11 @@ function validRepositoryOption(value: unknown): value is RepositoryOption {
     validRepositorySelector(option?.repositoryRef) &&
     isNonEmptyString(displayName) &&
     displayName.length <= 200 &&
-    ![...displayName].some((character) => {
-      const code = character.charCodeAt(0);
-      return code <= 0x1f || code === 0x7f;
-    }) &&
+    !hasControlCharacter(displayName) &&
     (option?.description === undefined ||
       (isNonEmptyString(option.description) &&
         option.description.length <= 512 &&
-        ![...option.description].some((character) => {
-          const code = character.charCodeAt(0);
-          return code <= 0x1f || code === 0x7f;
-        }))) &&
+        !hasControlCharacter(option.description))) &&
     Array.isArray(allowedProfiles) &&
     allowedProfiles.length >= 1 &&
     allowedProfiles.length <= 16 &&
