@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_PORT = 3128;
 const CONNECT_TIMEOUT_MS = 10_000;
 const SHUTDOWN_DRAIN_MS = 2_000;
+const REPLY_DRAIN_IDLE_MS = 10_000;
 const ALLOWED_SUFFIXES = [".slack.com", ".slack-edge.com", ".slack-msgs.com"];
 const ALLOWED_HOSTS = new Set(["slack.com", "slack-edge.com", "slack-msgs.com"]);
 
@@ -100,13 +101,13 @@ function createSlackProxyServer() {
     upstream.once("close", () => {
       // On upstream EOF, pipe() (or reject()) has already ended clientSocket. Destroying it
       // now would drop reply bytes still queued for a slow client, which then sees a clean
-      // EOF after a truncated reply. Close it once they are flushed, or once the client
-      // stops reading for CONNECT_TIMEOUT_MS.
+      // EOF after a truncated reply. Close it once they are flushed. A client that stops
+      // reading for REPLY_DRAIN_IDLE_MS gets a reset, so it cannot take the cut reply as whole.
       if (!clientSocket.writableEnded || clientSocket.writableFinished) {
         clientSocket.destroy();
         return;
       }
-      clientSocket.setTimeout(CONNECT_TIMEOUT_MS, () => clientSocket.destroy());
+      clientSocket.setTimeout(REPLY_DRAIN_IDLE_MS, () => clientSocket.resetAndDestroy());
       clientSocket.once("finish", () => clientSocket.destroy());
     });
     clientSocket.once("close", () => upstream.destroy());
