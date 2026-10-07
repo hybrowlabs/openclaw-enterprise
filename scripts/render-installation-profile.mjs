@@ -922,7 +922,12 @@ function buildRendered(profile, parsed, diagnostics) {
       authBaseUrl,
       diagnostics,
     );
-    agentNativeAdmin = { enabled: true, domain: agentNativeAdminDomain, sharedCookieDomain };
+    // The API lowercases both at startup; the chart accepts only lowercase.
+    agentNativeAdmin = {
+      enabled: true,
+      domain: agentNativeAdminDomain.toLowerCase(),
+      sharedCookieDomain: sharedCookieDomain.toLowerCase(),
+    };
   }
   const envoyNamespace =
     optionalString(controlPlane, ["controlPlane", "envoyNamespace"], diagnostics) ??

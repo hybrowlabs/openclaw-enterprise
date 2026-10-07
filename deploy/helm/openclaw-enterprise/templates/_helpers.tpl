@@ -149,6 +149,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- else if not (regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value) -}}
 {{- fail "api.trustedProxy.cidrs requires IPv4 or IPv6 CIDRs with a nonzero prefix" -}}
 {{- end -}}
+{{- include "openclaw.trustedProxy.validateCidrRange" $value -}}
 {{- end -}}
 {{- if and (eq $preset "generic") (not $proxy.clientAddressHeader) -}}{{- fail "api.trustedProxy.preset generic requires api.trustedProxy.clientAddressHeader" -}}{{- end -}}
 {{- $header := lower (toString (default "" $proxy.clientAddressHeader)) -}}
@@ -371,6 +372,40 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if not $routing.sandbox.ingressPeers -}}{{- fail "gatewayRouting.sandbox.ingressPeers must explicitly select public ingress sources" -}}{{- end -}}
 {{- $cookieDomain := trimPrefix "." (lower .Values.agentNativeAdmin.sharedCookieDomain) -}}
 {{- if and $cookieDomain (or (eq $routing.sandbox.domain $cookieDomain) (hasSuffix (printf ".%s" $cookieDomain) $routing.sandbox.domain) (hasSuffix (printf ".%s" $routing.sandbox.domain) $cookieDomain)) -}}{{- fail "gatewayRouting.sandbox.domain must be outside the OCE shared session cookie domain" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Check CIDR meaning separately from syntax so every spelling has the API's
+IPv4-mapped prefix rules. Node also matches IPv4 peers against IPv6 subnets that
+contain the entire ::ffff:0:0/96 range. Such entries must not trust forwarded headers. */ -}}
+{{- define "openclaw.trustedProxy.validateCidrRange" -}}
+{{- $address := lower (first (splitList "/" .)) -}}
+{{- if contains ":" $address -}}
+{{- $prefix := int (last (splitList "/" .)) -}}
+{{- /* Both checks concern only the first 96 bits; a dotted tail occupies the final two groups. */ -}}
+{{- $tail := regexFind "[0-9]+(\\.[0-9]+){3}$" $address -}}
+{{- if $tail -}}{{- $address = printf "%s0:0" (trimSuffix $tail $address) -}}{{- end -}}
+{{- $halves := splitList "::" $address -}}
+{{- $groups := splitList ":" $address -}}
+{{- if eq (len $halves) 2 -}}
+{{- $left := compact (splitList ":" (first $halves)) -}}
+{{- $right := compact (splitList ":" (last $halves)) -}}
+{{- $missing := sub 8 (add (len $left) (len $right)) -}}
+{{- if lt $missing 1 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- $groups = concat $left (splitList ":" (trimSuffix ":" (repeat (int $missing) "0:"))) $right -}}
+{{- end -}}
+{{- /* Guard expansion before inspecting bits; malformed input must never panic the template. */ -}}
+{{- if or (gt (len $halves) 2) (ne (len $groups) 8) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- $bits := "" -}}
+{{- range $group := $groups -}}
+{{- $bits = printf "%s%016b" $bits (int (printf "0x%s" $group)) -}}
+{{- end -}}
+{{- $mappedPrefix := printf "%s%s" (repeat 80 "0") (repeat 16 "1") -}}
+{{- if hasPrefix $mappedPrefix $bits -}}
+{{- if gt $prefix 32 -}}{{- fail "api.trustedProxy.cidrs contains an IPv4-mapped address, whose prefix must be 1 through 32" -}}{{- end -}}
+{{- else if and (le $prefix 96) (eq (substr 0 $prefix $bits) (substr 0 $prefix $mappedPrefix)) -}}
+{{- fail "api.trustedProxy.cidrs must not trust every address (covers every IPv4 address)" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

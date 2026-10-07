@@ -773,6 +773,34 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
   );
 });
 
+// The API lowercases both domains at startup, and the chart accepts only lowercase.
+test("native admin domains render lowercase for the chart", () => {
+  const output = render(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "https://Console.Example.co.uk",
+        agentNativeAdminDomain: "Agents.Example.co.uk",
+        sharedCookieDomain: "Example.co.uk",
+      },
+    }),
+  );
+  assert.equal(output.summary.ok, true, output.preflight.errors.join("\n"));
+  assert.match(
+    output.values,
+    /agentNativeAdmin:\n {2}enabled: true\n {2}domain: agents\.example\.co\.uk\n {2}sharedCookieDomain: example\.co\.uk\n/,
+  );
+  if (!helmSkip) {
+    const manifests = helmTemplate(output);
+    assert.match(
+      manifests,
+      /name: OCC_AGENT_NATIVE_ADMIN_DOMAIN\n\s+value: "agents\.example\.co\.uk"/,
+    );
+    assert.match(manifests, /name: OCC_AUTH_COOKIE_DOMAIN\n\s+value: "example\.co\.uk"/);
+  }
+});
+
 test("profiles pass an optional observability URL to Installation startup YAML", async () => {
   const url = "https://grafana.oce.example.internal/d/occ-observability";
   const withoutUrl = render("openclaw", baseInput());
