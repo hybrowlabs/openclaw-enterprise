@@ -238,7 +238,8 @@ permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
 permissions support only `read`, and for a `namespace` target, `resourceId` must
 equal the Namespace ID in the path. A binding applies only the Role permissions
 whose kind equals its target kind: an `agent_revision` permission bound to an
-Agent target grants nothing, so revision `read` is bound per AgentRevision. A ServiceAccount
+Agent target grants nothing, so revision `read` is bound per AgentRevision; deploy
+binds it for its [deployer](#deployer-revision-read). A ServiceAccount
 resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. An invalid Permission, or a subject, Role or
 target that is not usable in the path Namespace (including an Agent being
@@ -313,6 +314,21 @@ does not expose every Agent in the Namespace. First deployment additionally
 checks Agent `read` and `operate` if Compute must generate missing transport
 credentials.
 
+### Deployer revision read
+
+A deploy grants its caller exact `agent_revision:read` on the revision it
+admits, in the admission transaction, unless the caller can already read it.
+The binding (`binding_<revisionId>_deployer_read`) uses the Namespace Role
+`role_<namespaceId>_deployed_revision_read`, "Deployed revision read", which
+deploy creates on first use. The deploy audit event lists it in
+`grantedAccessBindings`. Deploy already requires read on the Configuration
+the revision snapshots and returns that snapshot, so the grant reveals nothing
+new. Other readers of the Agent, such as a Console sharee, still need their own
+revision grants. Administrators can delete the binding; Agent deletion removes
+it with the revision. An Installation-scoped ServicePrincipal cannot hold a
+Namespace binding and gets none, and IAM Drivers that keep policy outside
+platform State write none.
+
 [Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
 tiers on the exact Agent and revision: Pod status and Events need Agent
 `operate` and `read` plus revision `read`; container log text needs Agent
@@ -367,6 +383,8 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 11:00: Deploy grants its caller exact read of the admitted revision. (d94-revision-read)
 
 - 2026-10-06 15:40: Agent-targeting bindings are removed on deletion completion; the audit lists appear only when nonempty. (dogfood-r37)
 

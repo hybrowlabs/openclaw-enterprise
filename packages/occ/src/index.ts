@@ -7551,7 +7551,7 @@ export class OpenClawController {
 
   /**
    * Grants the deployer exact `agent_revision:read` on the revision this deploy admitted, in
-   * the admission transaction (RFC-0019). Deploy already required read on the Configuration
+   * the admission transaction. Deploy already required read on the Configuration
    * the revision snapshots and on its Secret and Harness sources, and its `202` returns the
    * snapshot, so the grant discloses nothing new. Agent deletion and Namespace teardown remove
    * it with the revision. Returns the binding for the deploy audit event, or nothing when the
