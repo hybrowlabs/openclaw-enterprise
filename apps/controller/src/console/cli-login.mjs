@@ -124,7 +124,7 @@ export function renderCliLogin(view, { request, isCurrent, onSessions }) {
       element("h2", {}, "Approve this sign-in?"),
       element("p", {}, "Check that this is the occ login you just started."),
       details,
-      warning,
+      ...(warning === null ? [] : [warning]),
       result,
       element("div", { className: "form-actions" }, approve, deny, cancel),
     );
