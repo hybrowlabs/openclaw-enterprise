@@ -97,7 +97,18 @@ function createSlackProxyServer() {
       }
       reject(clientSocket, 502, "Bad Gateway");
     });
-    upstream.once("close", () => clientSocket.destroy());
+    upstream.once("close", () => {
+      // On upstream EOF, pipe() (or reject()) has already ended clientSocket. Destroying it
+      // now would drop reply bytes still queued for a slow client, which then sees a clean
+      // EOF after a truncated reply. Close it once they are flushed, or once the client
+      // stops reading for CONNECT_TIMEOUT_MS.
+      if (!clientSocket.writableEnded || clientSocket.writableFinished) {
+        clientSocket.destroy();
+        return;
+      }
+      clientSocket.setTimeout(CONNECT_TIMEOUT_MS, () => clientSocket.destroy());
+      clientSocket.once("finish", () => clientSocket.destroy());
+    });
     clientSocket.once("close", () => upstream.destroy());
     clientSocket.once("error", () => upstream.destroy());
   });
