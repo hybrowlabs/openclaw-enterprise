@@ -71,6 +71,7 @@ function credentialFixture({
   runtime = true,
   namespaceReadStatus = 200,
   twoCluster = false,
+  legacy = false,
   secretReadStatus = undefined,
   secretCreateStatus = undefined,
   deploymentListStatus = undefined,
@@ -101,16 +102,18 @@ function credentialFixture({
     ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: namespace.id }),
     status: { phase: "Active" },
   };
-  if (!twoCluster) {
+  if (!twoCluster && !legacy) {
     // A single-cluster tenant holds its own canonical storage.
     namespaceObject.metadata.labels["openclaw.dev/gateway-namespace"] = namespace.id;
   }
-  const controlNamespace = twoCluster
-    ? {
-        ...driver.gatewayNamespaceManifest({ namespaceId: namespace.id }),
-        status: { phase: "Active" },
-      }
-    : undefined;
+  // A legacy single-cluster tenant keeps the separate Gateway namespace an older release made.
+  const controlNamespace =
+    twoCluster || legacy
+      ? {
+          ...driver.gatewayNamespaceManifest({ namespaceId: namespace.id }, true),
+          status: { phase: "Active" },
+        }
+      : undefined;
   const calls = [];
   const created = [];
   const deleted = [];
@@ -963,6 +966,38 @@ test("two-cluster Agent deletion removes Gateway state after the execution names
   const claims = { [claim.metadata.name]: claim };
   const fixture = credentialFixture({ twoCluster: true, claims, namespaceReadStatus: 404 });
   await fixture.driver.deleteAgentRuntimeCredentials(binding());
+  assert.deepEqual(Object.keys(claims), []);
+});
+
+test("a legacy single-cluster tenant keeps dedicated credentials and Gateway state in its Gateway namespace", async () => {
+  const legacyName = kubernetesGatewayNamespaceName(namespace.id);
+  const provisioned = credentialFixture({ legacy: true });
+  assert.deepEqual(await provisioned.driver.provisionAgentRuntimeCredentials(binding(), {}), {
+    transportConfigured: true,
+  });
+  assert.deepEqual(
+    provisioned.created.map(({ metadata }) => [metadata.namespace, metadata.name]),
+    [
+      [legacyName, `transport-${digest(agent.id)}`],
+      [legacyName, `gateway-password-${digest(agent.id)}`],
+    ],
+  );
+
+  // Agent deletion removes the Gateway state in the legacy namespace and the workspace in the tenant.
+  const ownership = { namespaceId: namespace.id, agentId: agent.id };
+  const gatewayClaim = provisioned.driver.gatewayPrivateStateClaim(agent.id, ownership, {
+    name: legacyName,
+    plane: "control",
+  });
+  gatewayClaim.metadata.uid = "legacy-gateway-claim";
+  const workspaceClaim = provisioned.driver.harnessWorkspaceClaim(agent.id, ownership, {
+    name: provisioned.namespaceName,
+    plane: "execution",
+  });
+  workspaceClaim.metadata.uid = "tenant-workspace-claim";
+  const claims = { gateway: gatewayClaim, workspace: workspaceClaim };
+  const deletion = credentialFixture({ legacy: true, claims });
+  await deletion.driver.deleteAgentRuntimeCredentials(binding());
   assert.deepEqual(Object.keys(claims), []);
 });
 

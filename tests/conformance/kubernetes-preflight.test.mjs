@@ -57,7 +57,7 @@ test("Kubernetes preflight accepts supported Kubernetes release families", async
   }
 });
 
-test("single-cluster preflight refuses legacy split storage on a later namespace page", async () => {
+test("single-cluster preflight keeps legacy Gateway storage and refuses two storage targets across pages", async () => {
   const fixture = driverForVersion("v1.35.0");
   const { core } = await fixture.driver.apiClients;
   const namespaceId = "ns_upgrade_00000000-0000-4000-8000-000000000001";
@@ -68,18 +68,40 @@ test("single-cluster preflight refuses legacy split storage on a later namespace
     },
   };
   const original = structuredClone(legacy);
+  let second = [];
   let pages = 0;
   core.listNamespace = async ({ _continue: cursor }) => {
     pages += 1;
     if (cursor === undefined) {
-      return { items: [], metadata: { _continue: "next-page" } };
+      return { items: [legacy], metadata: { _continue: "next-page" } };
     }
     assert.equal(cursor, "next-page");
-    return { items: [legacy] };
+    return { items: second };
   };
-  await assert.rejects(fixture.driver.preflight(), /Existing split-layout Gateway storage/);
-  assert.equal(pages, 2, "upgrade detection must inspect every namespace page");
+  // A tenant created before the shared layout keeps its separate Gateway namespace.
+  assert.deepEqual(await fixture.driver.preflight(), { warnings: [] });
+  assert.equal(pages, 2, "storage targets must be collected from every namespace page");
   assert.deepEqual(legacy, original, "preflight must not alter legacy storage ownership");
+
+  // A tenant namespace also labelled for storage, on a later page, makes storage ambiguous.
+  second = [
+    {
+      metadata: {
+        name: "adopted-tenant",
+        labels: {
+          "openclaw.dev/gateway-namespace": namespaceId,
+          "openclaw.dev/namespace": namespaceId,
+        },
+      },
+    },
+  ];
+  await assert.rejects(
+    fixture.driver.preflight(),
+    new RegExp(
+      `Kubernetes namespaces adopted-tenant and ${kubernetesGatewayNamespaceName(namespaceId)} both claim canonical storage for Namespace ${namespaceId}`,
+    ),
+  );
+  assert.deepEqual(legacy, original);
 });
 
 test("single-cluster preflight accepts canonical storage in a shared tenant namespace", async () => {

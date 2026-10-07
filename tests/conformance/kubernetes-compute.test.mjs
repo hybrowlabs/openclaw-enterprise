@@ -2978,6 +2978,208 @@ test("Namespace deletion removes only its owned Gateway target after data-plane 
   }
 });
 
+// A transport-only cluster for Namespace lifecycle: reads, server-side apply patches and
+// deletions of namespaced objects, keyed by kind, namespace and name.
+function namespaceLifecycleCluster(initial) {
+  const objects = new Map(initial.map((object) => [clusterKey(object), structuredClone(object)]));
+  const calls = [];
+  const notFound = () => Object.assign(new Error("Not found"), { statusCode: 404 });
+  const read = (kind) => async ({ name, namespace }) => {
+    const object = objects.get(clusterKey({ kind, metadata: { name, namespace } }));
+    if (object === undefined) {
+      throw notFound();
+    }
+    return structuredClone(object);
+  };
+  const patch = (kind) => async ({ name, namespace, body }) => {
+    calls.push(["patch", kind, namespace ?? "", name]);
+    const key = clusterKey({ kind, metadata: { name, namespace } });
+    const existing = objects.get(key);
+    const next = {
+      ...structuredClone(body),
+      metadata: {
+        ...existing?.metadata,
+        ...body.metadata,
+        labels: { ...existing?.metadata.labels, ...body.metadata.labels },
+        annotations: { ...existing?.metadata.annotations, ...body.metadata.annotations },
+        uid: existing?.metadata.uid ?? `${name}-uid`,
+      },
+      ...(existing?.status === undefined ? {} : { status: existing.status }),
+    };
+    objects.set(key, next);
+    return structuredClone(next);
+  };
+  const core = {
+    async listNamespace({ labelSelector }) {
+      const [label, value] = labelSelector.split("=");
+      return {
+        items: [...objects.values()]
+          .filter(({ kind, metadata }) => kind === "Namespace" && metadata.labels?.[label] === value)
+          .map((object) => structuredClone(object)),
+      };
+    },
+    readNamespace: read("Namespace"),
+    patchNamespace: patch("Namespace"),
+    async createNamespace({ body }) {
+      calls.push(["create", "Namespace", "", body.metadata.name]);
+      throw new Error("A single-cluster Driver must not create a Gateway namespace.");
+    },
+    async deleteNamespace({ name, body }) {
+      const key = clusterKey({ kind: "Namespace", metadata: { name } });
+      assert.equal(body?.preconditions?.uid, objects.get(key)?.metadata.uid);
+      calls.push(["delete", "Namespace", "", name]);
+      objects.delete(key);
+    },
+    readNamespacedResourceQuota: read("ResourceQuota"),
+    patchNamespacedResourceQuota: patch("ResourceQuota"),
+    readNamespacedLimitRange: read("LimitRange"),
+    patchNamespacedLimitRange: patch("LimitRange"),
+  };
+  const clients = {
+    core,
+    networking: {
+      readNamespacedNetworkPolicy: read("NetworkPolicy"),
+      patchNamespacedNetworkPolicy: patch("NetworkPolicy"),
+    },
+  };
+  return { objects, calls, clients };
+}
+
+function clusterKey({ kind, metadata }) {
+  return `${kind}:${kind === "Namespace" ? "" : metadata.namespace}:${metadata.name}`;
+}
+
+test("a legacy single-cluster tenant keeps its Gateway namespace through ensure and deletion", async () => {
+  const driver = createKubernetesComputeDriver(options());
+  const tenantName = kubernetesNamespaceName(tenant.id);
+  const legacyName = kubernetesGatewayNamespaceName(tenant.id);
+  // Both namespaces as the release before the shared layout created them.
+  const tenantNamespace = {
+    ...driver.manifest("v1", "Namespace", tenantName, { namespaceId: tenant.id }),
+    status: { phase: "Active" },
+  };
+  tenantNamespace.metadata.uid = "tenant-uid";
+  const legacyNamespace = {
+    ...driver.gatewayNamespaceManifest({ namespaceId: tenant.id }, true),
+    status: { phase: "Active" },
+  };
+  legacyNamespace.metadata.uid = "legacy-uid";
+  assert.equal(legacyNamespace.metadata.name, legacyName);
+  assert.equal(legacyNamespace.metadata.labels["openclaw.dev/namespace"], undefined);
+
+  const cluster = namespaceLifecycleCluster([tenantNamespace, legacyNamespace]);
+  driver.apiClients = Promise.resolve(cluster.clients);
+  assert.deepEqual(await driver.ensureNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceReady: true,
+  });
+  // Canonical storage stays in the legacy namespace: the tenant is not labelled for it,
+  // so storage discovery still finds exactly one namespace.
+  assert.equal(
+    cluster.objects.get(`Namespace::${tenantName}`).metadata.labels[
+      "openclaw.dev/gateway-namespace"
+    ],
+    undefined,
+  );
+  assert.deepEqual(
+    (await cluster.clients.core.listNamespace({
+      labelSelector: `openclaw.dev/gateway-namespace=${tenant.id}`,
+    })).items.map(({ metadata }) => metadata.name),
+    [legacyName],
+  );
+  // Both namespaces get their infrastructure; the legacy one only through apply, never create.
+  for (const namespace of [tenantName, legacyName]) {
+    for (const [kind, name] of [
+      ["ResourceQuota", "openclaw-quota"],
+      ["LimitRange", "openclaw-limits"],
+      ["NetworkPolicy", "allow-dns"],
+    ]) {
+      assert.ok(cluster.objects.has(`${kind}:${namespace}:${name}`), `${kind} in ${namespace}`);
+    }
+  }
+  assert.equal(cluster.calls.some(([action]) => action === "create"), false);
+
+  // An ambiguous adoption cannot add a second storage target beside the legacy namespace.
+  const adopted = {
+    apiVersion: "v1",
+    kind: "Namespace",
+    metadata: {
+      name: "customer-support",
+      labels: {
+        "openclaw.dev/namespace": tenant.id,
+        "openclaw.dev/gateway-namespace": tenant.id,
+        "pod-security.kubernetes.io/enforce": "restricted",
+        "pod-security.kubernetes.io/audit": "restricted",
+        "pod-security.kubernetes.io/warn": "restricted",
+      },
+      annotations: {
+        "openclaw.dev/namespace-id": tenant.id,
+        "openclaw.dev/namespace-lifecycle": "external",
+      },
+    },
+  };
+  assert.throws(
+    () => driver.verifyAdoptableNamespace(adopted, { namespaceId: tenant.id }, "legacy"),
+    /cannot hold canonical storage for a tenant with a legacy Gateway namespace/,
+  );
+
+  // A namespace with the legacy name but not created by OCE is never treated as storage.
+  for (const mutate of [
+    (namespace) => delete namespace.metadata.labels["app.kubernetes.io/managed-by"],
+    (namespace) => (namespace.metadata.labels["openclaw.dev/gateway-namespace"] = "ns_other"),
+    (namespace) => (namespace.metadata.annotations["openclaw.dev/namespace-id"] = "ns_other"),
+  ]) {
+    const foreign = structuredClone(legacyNamespace);
+    mutate(foreign);
+    const refused = namespaceLifecycleCluster([tenantNamespace, foreign]);
+    driver.apiClients = Promise.resolve(refused.clients);
+    const result = await driver.ensureNamespace(tenant);
+    assert.equal(result.namespaceReady, false);
+    assert.equal(result.failure, "permanent");
+    assert.deepEqual(refused.calls, []);
+  }
+
+  // Deletion removes the legacy namespace before the tenant namespace.
+  driver.apiClients = Promise.resolve(cluster.clients);
+  assert.deepEqual(await driver.deleteNamespace({ ...tenant, status: "deleting" }), {
+    namespaceId: tenant.id,
+    namespaceDeleted: true,
+  });
+  assert.deepEqual(
+    cluster.calls.filter(([action]) => action === "delete").map(([, , , name]) => name),
+    [legacyName, tenantName],
+  );
+
+  // A tenant whose namespace is already gone still loses its legacy namespace.
+  const orphaned = namespaceLifecycleCluster([legacyNamespace]);
+  driver.apiClients = Promise.resolve(orphaned.clients);
+  assert.deepEqual(await driver.deleteNamespace({ ...tenant, status: "deleting" }), {
+    namespaceId: tenant.id,
+    namespaceDeleted: true,
+  });
+  assert.equal(orphaned.objects.size, 0);
+
+  // Without a legacy namespace a single-cluster tenant uses the shared layout, and none is made.
+  const fresh = namespaceLifecycleCluster([]);
+  driver.apiClients = Promise.resolve(fresh.clients);
+  fresh.clients.core.patchNamespace = async ({ name, body }) => {
+    fresh.calls.push(["patch", "Namespace", "", name]);
+    const next = { ...structuredClone(body), metadata: { ...body.metadata, uid: `${name}-uid` } };
+    next.status = { phase: "Active" };
+    fresh.objects.set(`Namespace::${name}`, next);
+    return next;
+  };
+  assert.deepEqual(await driver.ensureNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceReady: true,
+  });
+  assert.equal(
+    fresh.objects.get(`Namespace::${tenantName}`).metadata.labels["openclaw.dev/gateway-namespace"],
+    tenant.id,
+  );
+  assert.equal(fresh.objects.has(`Namespace::${legacyName}`), false);
+});
+
 test("sandbox routing keeps generated HTML off the administrative origin and backend", () => {
   const driver = createKubernetesComputeDriver(
     routedOptions({
@@ -10935,7 +11137,13 @@ test("retirement preserves active storage and node routing and deletes exact own
 
 // These fixtures substitute Kubernetes transport only. Preparation, ownership, private delivery,
 // redaction, readiness, and completed-payload retention run through the production driver.
-function workspaceSetupFixture(embedded, runtime = true, network = undefined, computeOptions = {}) {
+function workspaceSetupFixture(
+  embedded,
+  runtime = true,
+  network = undefined,
+  computeOptions = {},
+  { legacy = false } = {},
+) {
   const state = { ready: false, secretFailure: false, failedInitializer: false };
   const driver = new KubernetesComputeDriver(
     routedOptions({
@@ -10982,8 +11190,9 @@ function workspaceSetupFixture(embedded, runtime = true, network = undefined, co
       : { id: "codex", version: "1.0.0", mode: "dedicated" },
   });
   const namespace = kubernetesNamespaceName(tenant.id);
+  // A legacy single-cluster tenant keeps the separate Gateway namespace an older release made.
   const control =
-    computeOptions.executionCluster === undefined
+    computeOptions.executionCluster === undefined && !legacy
       ? namespace
       : kubernetesGatewayNamespaceName(tenant.id);
   const objects = new Map();
@@ -11016,7 +11225,7 @@ function workspaceSetupFixture(embedded, runtime = true, network = undefined, co
     status: { phase: "Active" },
   });
   save({
-    ...driver.gatewayNamespaceManifest({ namespaceId: tenant.id }),
+    ...driver.gatewayNamespaceManifest({ namespaceId: tenant.id }, legacy || undefined),
     status: { phase: "Active" },
   });
   save({
@@ -11098,8 +11307,16 @@ function workspaceSetupFixture(embedded, runtime = true, network = undefined, co
       objects.delete(key(kind, name, target));
     };
   const core = {
-    async listNamespace() {
-      return { items: [] };
+    async listNamespace({ labelSelector }) {
+      if (!legacy) {
+        return { items: [] };
+      }
+      const [label, value] = labelSelector.split("=");
+      return {
+        items: [...objects.values()].filter(
+          (object) => object.kind === "Namespace" && object.metadata.labels?.[label] === value,
+        ),
+      };
     },
     readNamespace: read("Namespace"),
     async listNamespacedPod({ namespace: target, labelSelector }) {
@@ -11246,8 +11463,10 @@ function workspaceSetupFixture(embedded, runtime = true, network = undefined, co
   return { driver, revision, namespace, objects, records, state, setup, context };
 }
 
-for (const dualCluster of [false, true]) {
-  test(`Kubernetes ${dualCluster ? "two-cluster" : "single-cluster"} OAuth handoff consumes the source before native startup and reuses private storage`, async () => {
+for (const layout of ["single-cluster", "two-cluster", "legacy single-cluster"]) {
+  const dualCluster = layout === "two-cluster";
+  const legacy = layout === "legacy single-cluster";
+  test(`Kubernetes ${layout} OAuth handoff consumes the source before native startup and reuses private storage`, async () => {
     const { driver, revision, namespace, objects, records, state, context } = workspaceSetupFixture(
       false,
       true,
@@ -11270,6 +11489,7 @@ for (const dualCluster of [false, true]) {
             },
           }
         : {},
+      { legacy },
     );
     if (dualCluster) {
       // Distinct transports reject requests sent to the wrong cluster. The production Driver
@@ -11461,6 +11681,23 @@ for (const dualCluster of [false, true]) {
       gateway.spec.template.spec.volumes.some(({ name }) => name === authMount.name),
       false,
     );
+    if (legacy) {
+      // The tenant keeps its pre-shared layout: Gateway and its state in the legacy namespace,
+      // canonical sources read there, and no storage label added to the tenant namespace.
+      const legacyNamespace = kubernetesGatewayNamespaceName(tenant.id);
+      assert.equal(gateway.metadata.namespace, legacyNamespace);
+      assert.equal(harness.metadata.namespace, namespace);
+      assert.equal(sourceKey, `Secret:${legacyNamespace}:occ-model-key`);
+      assert.ok(objects.has(`PersistentVolumeClaim:${legacyNamespace}:gateway-state-${digest(revision.agentId)}`));
+      assert.equal(
+        objects.has(`PersistentVolumeClaim:${namespace}:gateway-state-${digest(revision.agentId)}`),
+        false,
+      );
+      assert.equal(
+        objects.get(`Namespace::${namespace}`).metadata.labels["openclaw.dev/gateway-namespace"],
+        undefined,
+      );
+    }
 
     // A later revision has no usable OCE bundle: it selects the same durable native generation.
     const later = { ...revision, id: `${revision.id}-next`, revision: revision.revision + 1 };
@@ -11491,6 +11728,64 @@ for (const dualCluster of [false, true]) {
     assert.equal(
       [...objects.values()].some(({ metadata }) => metadata.name.startsWith("oauth-bootstrap-")),
       false,
+    );
+  });
+}
+
+for (const embedded of [true, false]) {
+  test(`a legacy single-cluster ${embedded ? "embedded" : "dedicated"} Agent reads canonical sources from its Gateway namespace`, async () => {
+    const { driver, revision, namespace, objects, records, context } = workspaceSetupFixture(
+      embedded,
+      true,
+      undefined,
+      {},
+      { legacy: true },
+    );
+    const legacyName = kubernetesGatewayNamespaceName(tenant.id);
+    assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+    const placed = (prefix) =>
+      records
+        .filter(({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith(prefix))
+        .map(({ metadata }) => metadata.namespace);
+    // Embedded Gateways always ran beside the tenant; dedicated ones stay in the legacy namespace.
+    assert.deepEqual([...new Set(placed("gateway-"))], [embedded ? namespace : legacyName]);
+    assert.deepEqual([...new Set(placed("agent-"))], embedded ? [] : [namespace]);
+    const claims = records
+      .filter(({ kind }) => kind === "PersistentVolumeClaim")
+      .map(({ metadata }) => `${metadata.namespace}/${metadata.name.split("-")[0]}`);
+    assert.ok(claims.includes(`${embedded ? namespace : legacyName}/gateway`));
+    // The model key exists only in the legacy namespace; the Harness copy proves where it was read.
+    const projection = records.find(
+      ({ kind, metadata }) => kind === "Secret" && metadata.name.startsWith("harness-secrets-"),
+    );
+    assert.equal(projection.metadata.namespace, namespace);
+    assert.equal(
+      Buffer.from(projection.data.OPENAI_API_KEY, "base64").toString(),
+      "fixture-model-key",
+    );
+    if (!embedded) {
+      // The dedicated Gateway consumes its transport source directly, in the same namespace.
+      const gateway = records.find(
+        ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("gateway-"),
+      );
+      const transport = gateway.spec.template.spec.containers[0].env.find(
+        ({ name }) => name === "APP_SERVER_TOKEN",
+      );
+      assert.equal(transport.valueFrom.secretKeyRef.name, `transport-${digest(revision.agentId)}`);
+      assert.ok(objects.has(`Secret:${legacyName}:transport-${digest(revision.agentId)}`));
+    }
+    // Nothing is written as canonical storage into the tenant namespace.
+    assert.equal(
+      records.some(
+        ({ kind, metadata }) =>
+          kind === "Namespace" ||
+          (metadata.namespace === namespace && metadata.name === "occ-model-key"),
+      ),
+      false,
+    );
+    assert.equal(
+      objects.get(`Namespace::${namespace}`).metadata.labels["openclaw.dev/gateway-namespace"],
+      undefined,
     );
   });
 }
