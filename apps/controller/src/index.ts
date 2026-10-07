@@ -1553,7 +1553,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   // RFC-0019: the bounded periodic sweep of expired CLI device authorizations and sessions.
   // Start and exchange also remove expired rows; a failed sweep waits for the next interval.
-  const cliSignInSweep = options.auth.cliSignIn;
+  const cliSignInSweep = options.auth?.cliSignIn;
   if (cliSignInSweep?.enabled === true) {
     const timer = setInterval(() => {
       cliSignInSweep.sweep().catch(() => {});
