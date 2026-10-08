@@ -9,7 +9,7 @@ author: freeqaz
 - **ID:** RFC-0019
 - **Owner:** freeqaz (proposal and auth review); CI and Local Setup review: OCE maintainers.
 - **Created:** 2026-10-03
-- **Last updated:** 2026-10-04 (implementation open as a six-PR stack, see Delivery)
+- **Last updated:** 2026-10-08 (implementation open as a six-PR stack, see Delivery)
 - **RFC PR:** [#1117](https://github.com/openclaw/openclaw-enterprise/pull/1117)
 - **Related:** [RFC-0001](0001-oidc-sign-in.md) (generic OIDC sign-in; implementation
   [#790](https://github.com/openclaw/openclaw-enterprise/pull/790));
@@ -18,249 +18,116 @@ author: freeqaz
   [RFC #924](https://github.com/openclaw/openclaw-enterprise/pull/924).
 
 <a id="problem-and-decision"></a>
+<a id="summary"></a>
+<a id="motivation"></a>
+<a id="goals"></a>
 
-## Summary
+## Problem and decision
 
-Keycloak is the only identity provider OCE has ever been checked against, twice by hand and
-never by CI. This RFC makes it a **verified** provider: one checked-in realm file feeds a
-Keycloak guide page, an opt-in Local Setup sign-in profile that runs a persistent Keycloak in
-the k3d cluster, and a CI lane that drives the real browser flow against a pinned Keycloak,
-with no change to product authentication and no test-only knobs.
+OCE’s [generic OIDC sign-in](0001-oidc-sign-in.md) has relied on the [synthetic provider](../../tests/helpers/production-sign-in.mjs) in merged automated coverage; the open implementation stack adds real-provider CI. Earlier manual checks for #790 and dogfood found defects fixed by #903 and #806, but their harnesses were not checked in, and the existing [OIDC guide](../../docs/guides/deploy/oidc-sign-in.md) gives operators limited Keycloak-specific guidance.
 
-## Motivation
+This RFC proposes one shared, pinned Keycloak realm as the basis for a documented provider recipe, a real-provider browser CI lane, and an opt-in Kubernetes Local Setup sign-in profile. The goal is to make the supported configuration and its verified flows repeatable without changing product authentication or adding test-only controller behavior. Local Setup would retain its realm across restarts and attach the development administrator to a Keycloak identity; the administrator password remains available for recovery.
 
-Every automated OIDC test uses the `fakeOidc` fixture
-([production-sign-in.mjs](../../tests/helpers/production-sign-in.mjs)), which by its own
-description proves OCE against its own reading of OIDC, not any IdP's behaviour. Keycloak was
-exercised twice by hand (for #790, and on the dogfood install, finding the defects fixed by
-#903 and #806); neither harness is in the repository, that Keycloak lost its realm on every
-Pod restart, and the [guide](../../docs/guides/deploy/oidc-sign-in.md) gives Keycloak one
-table row. Locally, humans sign in with the generated administrator password, automation uses
-the 30-day bootstrap service key, and `occ dev up` has no sign-in option.
+Keycloak authenticates **humans**; OCE IAM continues to determine what the attached account may do. The resulting Console session is the existing eight-hour, non-refreshing OIDC session. **Agent and other machine credentials** remain separate: this proposal does not issue IdP tokens to API clients or change service keys or other Agent credentials. [Controller bearer authentication](../../apps/controller/src/auth/index.ts) stays disabled. Bootstrap still writes a 30-day service key; shorter lifetimes use the [service-key API](../../docs/reference/authentication/service-api-keys.md) (`expiresIn`). Short-lived IdP-issued machine credentials are the subject of [RFC #924](https://github.com/openclaw/openclaw-enterprise/pull/924).
 
-## Goals
+<a id="non-goals"></a>
+<a id="what-changes-for-credentials"></a>
 
-- **Supported Keycloak**: a documented realm recipe, a pinned major version, and a named list
-  of flows CI verifies, all derived from one realm file so the guide cannot drift from the
-  tests.
-- **Local sign-in**: one environment variable gives the Kubernetes-only Local Setup install a
-  Keycloak that survives restarts, with the development administrator attached, so browser
-  sessions are short-lived and the password serves recovery only.
-- **CI**: a hermetic lane with a digest-pinned Keycloak, a real browser and deadline-bounded
-  waits, runnable on a developer host.
-
-## Non-goals
-
-- IdP-issued credentials for API clients (bearer tokens, token exchange, client credentials,
-  device flow). Bearer authentication stays disabled
-  ([auth/index.ts](../../apps/controller/src/auth/index.ts), `verify`); short-lived machine
-  credentials are RFC #924's territory.
-- Claim mapping, just-in-time accounts, RP-initiated or back-channel logout, runtime
-  discovery, private-key client authentication: RFC-0001's non-goals stand.
-- New chart surface: no IdP CA value, no egress port knob, no relaxed endpoint rules. The
-  in-cluster egress workaround stays a documented extra NetworkPolicy.
-- Relaxing the OIDC and native-admin exclusivity, for development included: OIDC supports
-  host-only cookies only
-  ([\_helpers.tpl](../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl)), a
-  cookie-scope decision (RFC-0007, RFC-0001).
-- Keycloak as a production recipe: `start-dev` and the dev-file database are development
-  tooling; the guide says so.
-- Verifying Auth0, Okta or Entra ID, or changing RFC-0001's status.
+The profile carries tradeoffs: it requires host loopback port 443, browser trust setup, and a Kubernetes installation; OIDC’s existing [host-only cookie and native-administrator exclusivity rules](../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl) still apply, preserving RFC-0007 and RFC-0001’s cookie-scope decision. This proposal does not make the development Keycloak configuration production-ready, verify other providers, or add claim mapping, just-in-time accounts, new logout flows, runtime discovery, private-key client authentication, or new chart knobs for IdP trust and egress. RFC-0001’s status is unchanged.
 
 <a id="design"></a>
+<a id="proposal"></a>
+<a id="one-realm-file"></a>
+<a id="what-supported-means"></a>
+<a id="security-and-failure"></a>
 
-## Proposal
+## Provider contract and trust
 
-### One realm file
+The proposal uses one checked-in [realm file](https://github.com/openclaw/openclaw-enterprise/blob/6339219af56d7740bc93f54512962ea10f585de7/tests/fixtures/keycloak/realm-oce.json) for the guide, Local Setup, and the CI lane. It defines realm `oce`, a confidential client `oce-console`, and users `alice` and `carol` with fixed subject identifiers. The client permits the authorization-code flow only, requires PKCE `S256`, and has one redirect URI; implicit and direct grants are disabled. Both environments read the same digest-pinned Keycloak 26.x image from `tests/fixtures/keycloak/image.json`.
 
-`tests/fixtures/keycloak/realm-oce.json` is a hand-edited Keycloak realm export that the
-launcher and the lane import unchanged: realm `oce`; one confidential client `oce-console`
-with the authorization-code flow only, PKCE `S256` required, no implicit or direct grants, no
-audience mapper and one redirect URI; and users `alice` and `carol` with fixed IDs, so their
-`sub` values are known. It contains no secret: the redirect URI, client secret and user
-passwords are `${VAR}` placeholders that `--import-realm` resolves from environment variables
-set from per-run values kept in `0600` files. Keycloak 26.7.5 imports an unset placeholder as
-its literal text (observed), so the lane and the launcher refuse to start while any
-placeholder variable is empty, and readiness reads the client back through the admin API and
-fails unless its secret and single redirect URI are the generated values. The image digest
-sits beside the realm in `tests/fixtures/keycloak/image.json`, read by both, so one bump
-changes both.
+The realm file contains placeholders for the redirect URI, client secret, and user passwords, not their values. Secrets are generated per run or installation and kept in `0600` files. Unset placeholders import as literal text (observed in 26.7.5), so startup refuses empty values and verifies the imported client secret and redirect URI through the Keycloak admin API. Keycloak administrator credentials stay confined to the CI fixture or local development installation and its private state.
 
-### What "supported" means
+The provider recipe requires a default `RS256` signing key of at least 2,048 bits and no audience mapper: the ID token’s audience is the client ID, and OCE rejects other audiences. `KC_HOSTNAME` is the HTTPS origin without a port or path; the configured issuer must match `${KC_HOSTNAME}/realms/<realm>` exactly. The issuer, authorization, token and JWKS URLs must share one DNS host, use HTTPS on port 443 without an explicit port in their URLs, and present a certificate trusted by the API. When the API runs in a Pod, the host must not end in `.localhost`, which resolves to loopback there. The [Keycloak guide](https://github.com/openclaw/openclaw-enterprise/blob/6339219af56d7740bc93f54512962ea10f585de7/docs/guides/deploy/oidc-keycloak.md) in the open stack describes the provider recipe. The controller uses configured endpoints, never runtime discovery, and fetches JWKS at each callback; an unavailable token or JWKS endpoint fails sign-in closed.
 
-A guide child page, `docs/guides/deploy/oidc-keycloak.md`, linked from the IdP table, gives
-the pinned major version (26), the realm recipe as admin-console steps, where `sub` is shown,
-and the provider constraints:
+A user begins at the Console and authenticates with Keycloak. OCE accepts the resulting identity only when its exact issuer and subject, for the configured client, are already attached to an OCE account; an unattached identity is rejected rather than creating an account. Keycloak authenticates the user, while OCE IAM determines that account’s permissions. Successful sign-in creates the existing eight-hour, non-refreshing OCE session. Disabling a user in Keycloak prevents the next sign-in but does not end an existing OCE session. Console sign-out ends only the OCE session; while the Keycloak session lives, one click can sign the user in again. Offboarding must revoke OCE access too.
 
-- The realm's default `RS256` key is 2,048 bits or more.
-- The client has no audience mapper: a Keycloak ID token's `aud` is the client ID by default,
-  and OCE refuses any other audience.
-- `KC_HOSTNAME` is the issuer's origin written without a port; the issuer is
-  `${KC_HOSTNAME}/realms/<realm>` and must equal `auth.oidc.issuer` character for character.
-- The four endpoints share one DNS host, written without a port, served over HTTPS on 443
-  with a certificate the API trusts. The host does not end in `.localhost` when the API runs
-  in a Pod, because the controller image resolves such names to loopback.
+Local Setup attaches `alice` to the development administrator. The administrator password remains available for recovery only; OIDC and native embedded administration remain mutually exclusive. This development Keycloak uses `start-dev` and a dev-file database and is not a production-ready IdP recipe.
 
-It ends with the verified-flow table below, keyed by the lane's expected test names, and
-links `docs/testing/keycloak.md`, which owns the lane.
+<a id="local-setup-sign-in-profile"></a>
 
-### Local Setup sign-in profile
+## Local setup and lifecycle
 
-`OCC_DEVELOPMENT_SIGN_IN=keycloak` is read by `occ dev up` in the Kubernetes-only profile
-(`OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes`, `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes`,
-`OCC_DEVELOPMENT_SANDBOX_DRIVER=none`): the only one that installs Envoy Gateway and
-cert-manager and sets the HTTPS `auth.baseUrl`
-([openshell_k3d.go](../../internal/occdev/openshell_k3d.go)) the chart requires for
-`auth.oidc`, so no new chart values are needed; every other profile refuses the variable and
-says why. It adds:
+The proposed `OCC_DEVELOPMENT_SIGN_IN=keycloak` profile runs only with Kubernetes compute and control plane and `OCC_DEVELOPMENT_SANDBOX_DRIVER=none`. Other profiles refuse the setting. It reserves host loopback port 443 for Keycloak and rejects conflicting configured ports or an existing listener before provisioning. k3d must publish `127.0.0.1:443:30443@loadbalancer` when the cluster is created; enabling the profile on a cluster without that publication requires `occ dev down` followed by `occ dev up`.
 
-| Piece        | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Keycloak     | Namespace `occ-development-keycloak`: the pinned image running `start-dev --import-realm` with `KC_DB=dev-file` on a PersistentVolumeClaim, the realm as a ConfigMap annotated with its sha256, and generated admin, client and user secrets. Import runs only when the realm is absent, so it survives Pod restarts; a changed realm file produces a warning until `occ dev down` removes the volume. Redirect URI: `<auth.baseUrl>/api/auth/providers/oidc/callback`.                                                                               |
-| Name and TLS | `keycloak.occ-dev-<name>.oce.test`, terminated by a dedicated Gateway `keycloak` (the chart's Gateway is untouched) whose Envoy Service is a fixed-name NodePort set through an EnvoyProxy patch: a CoreDNS rewrite to that Service, and a Certificate from the chart's gateway-routing CA Issuer, mirrored to `occ-development-keycloak` for the listener. The API already trusts that root (`NODE_EXTRA_CA_CERTS`); the launcher exports it as `gateway-ca.crt` for the browser.                                                                    |
-| Host port    | **New, creation-time:** a k3d `--port 127.0.0.1:443:30443@loadbalancer` publication. k3d fixes port maps at creation, so toggling the profile is `occ dev down` then `occ dev up`; the launcher fails fast on a busy 443 and refuses a cluster created without it.                                                                                                                                                                                                                                                                                    |
-| Egress       | The extra API-to-Envoy-Pods NetworkPolicy on target port 10443, as the guide documents for in-cluster IdPs.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Readiness    | Discovery served through `127.0.0.1:443`, trusting only the exported CA, then the admin-API client check above; no wait on the Gateway's Programmed condition, which a NodePort Service may never set.                                                                                                                                                                                                                                                                                                                                                |
-| Chart values | Two Helm passes. The first bootstraps as today; the launcher signs in with the administrator password through the Console publication and reads the administrator's user ID. The second upgrades with `auth.oidc.*`, `auth.recoveryUserId` (that ID), `auth.passwordSignIn: recovery-only` and `agentNativeAdmin.enabled: false`. Only then (the attach route answers 409 while OIDC is off) the launcher signs in again as the recovery account and `POST`s `/api/auth/accounts/<id>/providers/oidc` with `alice`'s subject and the account version. |
-| Developer    | Startup prints the Console URL, the `alice` password file, the two CAs to import (browser CA for the Console, gateway CA for Keycloak) and the `/etc/hosts` line `127.0.0.1 keycloak.occ-dev-<name>.oce.test`.                                                                                                                                                                                                                                                                                                                                        |
+The [first Helm pass](../../internal/occdev/openshell_k3d.go) installs OCE with password sign-in. The launcher then installs the pinned Keycloak image and shared realm, with generated credentials in `0600` files. A persistent volume keeps the realm across Pod restarts. Realm import occurs only when the realm is absent; a changed realm file produces an installation-time warning, and replacing the realm requires teardown. `occ dev down` destroys the realm volume.
 
-### CI lane
+A dedicated Gateway terminates TLS for `keycloak.occ-dev-<name>.oce.test`; CoreDNS directs in-cluster requests to its Envoy Service. The API trusts the gateway CA through `NODE_EXTRA_CA_CERTS`. Readiness checks discovery through `127.0.0.1:443` using only the exported CA, then checks the client through the admin API; it does not wait for the Gateway’s Programmed condition. Before enabling OIDC, the launcher validates the dedicated Service’s identity, ownership, ports and addresses through the owned cluster context. It permits egress to those exact IPv4 Service addresses as `/32` CIDRs and retains the selector-scoped rule for Envoy Pods on port 10443. Missing, invalid, unowned or unsupported addresses fail closed before the second pass.
 
-A new lane, `keycloak-oidc`, with one file,
-`tests/integration/keycloak-oidc-sign-in.test.mjs`, `prepare.postgres` and
-`prepare.keycloak: true`. Keycloak is a tracked resource that cleanup always removes, even
-after a failed run.
+After Keycloak readiness succeeds, the launcher authenticates to the Console as the bootstrap administrator and reads that account’s ID. Its client verifies the Console CA, sends the exact Origin, keeps cookies in a session jar and refuses redirects. The second Helm pass enables OIDC, sets `auth.recoveryUserId`, selects `auth.passwordSignIn: recovery-only` and sets `agentNativeAdmin.enabled: false`. Once OIDC is available, the launcher obtains a fresh recovery session and posts Alice’s subject and the current account version to `/api/auth/accounts/<id>/providers/oidc` (409 while OIDC is off). Attachment invalidates the account’s existing sessions; the launcher does not retry the identity mutation.
 
-1. **Start.** Generate a two-day private CA and leaves for `keycloak.oce.localhost` and
-   `127.0.0.1` with `openssl`. Unless `dns.lookup` returns exactly `127.0.0.1` for that name
-   (a `::1`-first answer against a loopback-only publication is a flake), add the `/etc/hosts`
-   line with `sudo -n` and remove it in cleanup; `docs/testing/keycloak.md` records the
-   logged answer per host. Reserve a free loopback port; the realm's redirect URI becomes
-   `https://127.0.0.1:<port>/api/auth/providers/oidc/callback`. Pull the pinned image through
-   `pullImage`'s bounded retry and digest check; run `start-dev --import-realm` with HTTPS on
-   the Keycloak leaf, `KC_HOSTNAME=https://keycloak.oce.localhost`, a 1.5 GiB memory limit
-   and the HTTPS port published on `127.0.0.1:443` (a busy 443 fails fast). Readiness is the
-   discovery issuer plus the client-secret check above, polled under a 180-second deadline.
-   Every failure names its step.
-2. **Hand over.** The file receives `OCC_TEST_DATABASE_URL`, the issuer, the reserved port,
-   the secrets and leaf paths, the container name and `NODE_EXTRA_CA_CERTS=<CA>`, which Node
-   reads only at start, so prepare sets it.
-3. **Prove.** The test composes the production API in-process (`composeProductionSignIn`)
-   on a loopback listener behind the HTTPS reverse proxy
-   [console-app.mjs](../../tests/helpers/console-app.mjs) already uses, exported as
-   `startHttpsIngress` and bound to the reserved port with the loopback leaf. That origin,
-   `https://127.0.0.1:<port>`, is `OCC_AUTH_BASE_URL` and matches the realm's one redirect
-   URI. Playwright's Chromium trusts exactly the two leaves through
-   `--ignore-certificate-errors-spki-list` and fills Keycloak's real login form; the
-   controller reaches the real token and JWKS endpoints with its unmodified transport.
-   Requests are observed, not stubbed.
+Startup prints the Console URL, credential paths, two CA certificates and the host entry needed for browser access. The operator imports the Console browser CA and Keycloak gateway CA and adds the printed hosts entry. Automated browser qualification uses fixture trust and does **not** prove that a person has successfully imported the CAs into a browser.
 
-| Verified flow (one named test each)                                                                                                                                                                             |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery matches the four configured values; the JWKS offers an `RS256` key of 2,048 bits or more with a `kid`.                                                                                                |
-| `alice`, attached, signs in (`client_secret_post`): the authorization request carries `scope=openid`, `code_challenge_method=S256`, a nonce and the configured redirect URI; `/console/` loads with a session.  |
-| The same with `client_secret_basic`, by recomposing the API with that setting.                                                                                                                                  |
-| Adding a higher-priority realm key through the admin API changes the JWKS `kid`; the next sign-in succeeds with no controller restart.                                                                          |
-| `carol`, not attached, lands on `/console/?authError=oidc`, is audited `EXTERNAL_IDENTITY_REJECTED`, and no account exists.                                                                                     |
-| Console sign-out deletes the OCE session; one click signs `alice` in again without a login form while the Keycloak session lives. Disabling her in Keycloak keeps the OCE session and refuses the next sign-in. |
+On startup failure or `occ dev down`, cleanup attempts to remove owned resources. If cleanup is incomplete, private state is retained for a subsequent `occ dev down` recovery; manual hosts entries and browser CA imports remain the operator’s responsibility. See the [local Kubernetes development guide](https://github.com/openclaw/openclaw-enterprise/blob/4eadb9782cda33b4e891ae277a81f50b0bec4958/docs/guides/deploy/local-kubernetes-development.md#sign-in-through-keycloak).
 
-The `alice` flow proves acceptance of Keycloak's default token. Extra audience rejection
-and provider-outage fail-closed behaviour remain covered by synthetic `fakeOidc` tests.
+**Proposed sign-in lifecycle.** The diagram describes the proposed flow; the implementation PRs remain open.
 
-The lane joins `scripts/ci/test-suites.json`, the `full` group and the Full Integration
-matrix at once and runs as its own job on `blacksmith-8vcpu-ubuntu-2404` with a 25-minute
-budget, not yet `CI Required`, as [First Agent smoke](../../docs/testing/first-agent-smoke.md)
-started. The suite audit lists the expected test names, and a skip fails the lane.
+![Proposed Keycloak sign-in lifecycle](../assets/0019-keycloak-oidc-verification/request-lifecycle.svg)
 
-### What changes for credentials
+[Editable diagram source](../assets/0019-keycloak-oidc-verification/request-lifecycle.mmd).
 
-For humans, the Console session is the eight-hour, non-refreshing session RFC-0001 already
-gives OIDC sign-in; the change is that Local Setup can use it. Scoping stays OCE IAM on the
-attached account; Keycloak decides only who may authenticate. For automation, nothing
-changes: bootstrap still writes a 30-day service key, shorter-lived keys come from the
-[service-key API](../../docs/reference/authentication/service-api-keys.md) (`expiresIn`),
-and IdP-issued machine credentials wait for RFC #924.
+<a id="ci-lane"></a>
 
-### Security and failure
+## Verification
 
-- Every secret is generated per run or install and lives in `0600` files; the realm file
-  holds none; the CA lives two days; Keycloak admin credentials never leave the lane or the
-  launcher state directory. The lane container runs as root to read its `0600` leaf key.
-- No environment-gated behaviour in the controller or the chart: TLS trust uses the
-  documented `NODE_EXTRA_CA_CERTS` path, the endpoint rule applies unchanged, and the fetch
-  transport is the production one.
-- An unready Keycloak, a changed login form, a digest mismatch, a literal placeholder or a
-  busy port fails the lane with the step named; cleanup runs regardless.
+The proposed `keycloak-oidc` lane uses PostgreSQL and runs a digest-pinned Keycloak and a real Chromium login against OCE’s production sign-in composition behind the shared [HTTPS ingress helper](../../tests/helpers/console-app.mjs). It checks discovery and JWKS, attached Alice’s sign-in with both `client_secret_post` and `client_secret_basic`, rejection and audit of unattached Carol, signing-key rotation without an OCE restart, and OCE sign-out, one-click re-sign-in and disabling a user in Keycloak. It observes `scope=openid`, `S256`, nonce and the exact redirect URI; Carol is audited as `EXTERNAL_IDENTITY_REJECTED` without an account. The API uses its normal token and JWKS transport. The lane checks named tests for skips, uses bounded image-pull retries and 180-second readiness, reports the failing step, and cleans up the Keycloak resource even after failure. The stack schedules it in full-mode PR CI, pushes to `main`, and Full Integration `all`, with a 25-minute job budget (the CI job uses `blacksmith-8vcpu-ubuntu-2404`); it is in the `full` suite group, not `CI Required`, as [First Agent smoke](../../docs/testing/first-agent-smoke.md) began. The separate `dev-up-k3d` launcher lane runs locally or by manual hosted dispatch, outside automatic CI and `all`. See the [testing guide](https://github.com/openclaw/openclaw-enterprise/blob/6339219af56d7740bc93f54512962ea10f585de7/docs/testing/keycloak.md).
 
-## Rationale and alternatives
+The lane generates a two-day CA, sets Node trust before test startup, and pins Chromium trust to its two leaves. It holds loopback 443, adds an owned hosts entry with `sudo -n` if IPv4 resolution requires it, and removes the container, hosts entry and private files on cleanup. Its container runs as root to read the `0600` TLS key.
 
-- **Extend `postgres-auth`**: rejected; a 450 MB pull and a JVM start in a `CI Required`
-  lane whose tests mock `globalThis.fetch`.
-- **Intercepting `fetch`** to reach 443 proves a patched stack; **`unshare -rn`** (as #790)
-  fails on Ubuntu 24.04's user-namespace restrictions; **a `*.localhost` launcher name**
-  resolves to loopback in the API Pod; **Testcontainers** hides the digest pin and retry
-  policy; the **dogfood browser workaround** needs a port-forward and a specially launched
-  browser. All rejected.
+The real-provider Alice flow verifies acceptance of Keycloak’s default ID token. Extra-audience rejection and fail-closed behavior during a provider outage remain covered by synthetic `fakeOidc` tests; they are not claims about the live Keycloak run.
 
-## Delivery
+As of October 8, the first implementation arm had passing real-Keycloak CI artifacts: one test for [#1133](https://github.com/openclaw/openclaw-enterprise/pull/1133), four for [#1134](https://github.com/openclaw/openclaw-enterprise/pull/1134), and six each for [#1135](https://github.com/openclaw/openclaw-enterprise/pull/1135) and [#1136](https://github.com/openclaw/openclaw-enterprise/pull/1136), with no failures, skips or todos and successful cleanup. The retained verification records identify tested merge commits containing the respective PR heads. The [hosted launcher run](https://github.com/openclaw/openclaw-enterprise/actions/runs/37796527211) at [#1138](https://github.com/openclaw/openclaw-enterprise/pull/1138) head `4eadb9782cda33b4e891ae277a81f50b0bec4958` passed all six cases, including browser sign-in, realm persistence after Pod replacement, injected second-pass and cluster-deletion failures with retained recovery state, and cleanup. The result’s `sourceSha` matches that head, with zero failures, skips or todos; lane cleanup and the targeted Full Integration Aggregate succeeded. This was not an `all` run. Its browser used fixture trust; it does not establish that a person imported the CAs manually. Its Agent model response used a deterministic fixture, not a live external model provider.
 
-Six human-gated pull requests, one per task, each based on its parent:
+<a id="verification-record-2026-10-04"></a>
 
-| PR                                                                 | Task                                                                                            | Base  |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ----- |
-| [#1133](https://github.com/openclaw/openclaw-enterprise/pull/1133) | Lane skeleton: realm, image pin, `prepare.keycloak`, lane and job, discovery test, testing page | main  |
-| [#1134](https://github.com/openclaw/openclaw-enterprise/pull/1134) | Real browser sign-in: `alice` (`post`, `basic`), `carol` refused; `startHttpsIngress`           | #1133 |
-| [#1135](https://github.com/openclaw/openclaw-enterprise/pull/1135) | Key rotation, sign-out, one-click re-sign-in, disabled user; runner hosts behaviour recorded    | #1134 |
-| [#1136](https://github.com/openclaw/openclaw-enterprise/pull/1136) | Keycloak guide page, IdP table link, nav and cheat sheet                                        | #1135 |
-| [#1137](https://github.com/openclaw/openclaw-enterprise/pull/1137) | Launcher: persistent Keycloak, 443 publication, Gateway, DNS, TLS, egress, `down` cleanup       | #1133 |
-| [#1138](https://github.com/openclaw/openclaw-enterprise/pull/1138) | Launcher: second Helm pass, attach, printed instructions, Local Setup docs                      | #1137 |
+The **October 4 snapshot** remains historical evidence:
 
-## Verification record (2026-10-04)
+- CI run [37166912213](https://github.com/openclaw/openclaw-enterprise/actions/runs/37166912213), on the then-combined stack at `ad9eda703` (`ci/keycloak-e2e`), recorded 6/6 Keycloak cases, no skips, and green required, PostgreSQL OIDC, Console Browser and k3d checks. The runner’s IPv4/IPv6 answer exercised the `sudo -n` hosts path; startup took 20.6 seconds.
+- Three clean developer runs passed 6/6 in a private network namespace. Forced busy-port, bad-digest and unset-placeholder failures named their step and cleaned up.
+- Dogfood verified Carol’s Namespace read (200), denied writes/admin reads (403), ordinary-password refusal (401), recovery-password success (200), Alice’s eight-hour `__Host-` session, a one-day service key through revocation, and sign-out/re-sign-in. It was then restored to password-only.
+- Launcher-rendered resources applied to dogfood verified the NodePort, Pod DNS and 10443 egress, sign-in, realm persistence after Pod deletion, and Namespace cleanup. This was cluster-side coverage only.
 
-- **CI:** the stack merged on `main` `ad9eda703` (branch `ci/keycloak-e2e`) ran the full
-  workflow, run 37166912213: `Keycloak OIDC` 6 passed, 0 skipped (artifact checked);
-  `CI Required`, both PostgreSQL OIDC suites, Console Browser and the k3d lanes green. The
-  runner resolved `keycloak.oce.localhost` to `[127.0.0.1, ::1]`, so the `sudo -n` hosts path
-  ran for the first time and worked; Keycloak started in 20.6 s.
-- **Developer host:** the lane through the CI entry points, 6/6 on three consecutive clean
-  runs in a private network namespace (nginx holds 443). Forced failures (busy 443, bad
-  digest, extra placeholder) named their step and left nothing.
-- **Dogfood, following the new guide:** its Keycloak moved to the pinned image with
-  `--import-realm`, so it is restart-proof. With OIDC enabled, a member attached to `carol`
-  holding one Namespace-read role signed in through Keycloak's form, read the Namespace (200)
-  and got 403 on every write and admin read; the member's password sign-in returned 401
-  (recovery-only), the administrator's 200; `alice` got an eight-hour `__Host-` session,
-  issued a one-day service key that worked until revoked, signed out and signed in again with
-  one click. Dogfood was then restored to password-only.
-- **Launcher, cluster side only:** the manifests and second-pass values rendered by the
-  launcher's own functions were applied to dogfood: the EnvoyProxy patch produced the
-  fixed-name NodePort Service, `node:30443` served discovery, the API Pod reached Keycloak
-  through the CoreDNS rewrite and the 10443 policy, `alice` signed in, the realm survived a
-  Keycloak Pod delete, and deleting the Namespace left nothing behind.
-- **Not verified anywhere:** the k3d `127.0.0.1:443` publication and its check, the
-  launcher's host-side discovery client, a complete `occ dev up` and `occ dev down` with the
-  profile (no available host has 443 free), a human browser with the two imported CAs and the
-  `/etc/hosts` line (all browser checks were headless), the Full Integration `all` aggregate
-  (its matrix entry is covered by `ci-impact.test.mjs`), other IdPs and Keycloak versions.
+That snapshot did not verify complete launcher up/down, host publication/discovery, human CA imports, Full Integration `all`, other IdPs or other versions. October 8 adds hosted launcher proof; human browser setup and the complete `all` run remain unqualified by this evidence. Neither snapshot establishes current adoption.
 
-## Risks
+<a id="delivery"></a>
 
-- **Keycloak cost and flakiness.** About 450 MB from `quay.io`, 20-50 s to start, ~1 GB of
-  memory. Mitigations: digest pin, `pullImage` retry, bounded readiness, a dedicated
-  non-required lane.
-- **Login-form scraping.** Playwright selectors and the "Account is disabled" text are tied
-  to the pinned version; a digest bump is a reviewed change.
-- **Port 443 on developer hosts.** The lane and the profile both take loopback 443, so a host
-  runs one at a time and neither beside a local web server; both fail fast.
-- **Realm drift.** Import runs only on an empty database, so a changed realm file needs
-  `occ dev down`; the launcher warns when it sees an older realm hash.
+## Delivery, rationale and decisions
 
-## Open questions
+The six implementation PRs form two branches from the shared fixture and lane:
 
-| Question                                                                        | Owner       | Proposed default                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| When does the lane become `CI Required`?                                        | freeqaz     | After two weeks of green runs on `main` with no infrastructure failure; promotion is a `ci.yml` `pr-safe` matrix entry plus the `test-suites.json` `ci`-group edit.                                                                 |
-| Does the dogfood install keep OIDC on?                                          | freeqaz     | Its Keycloak is now restart-proof and the enable and disable recipes are recorded. OIDC on costs embedded-Agent browser chat (`agentNativeAdmin.enabled: false`); the launcher profile needs host 443, which another service holds. |
-| Who runs the launcher profile end to end before #1137 and #1138 land?           | freeqaz     | A host with `127.0.0.1:443` free runs `occ dev up` with the profile, signs in as `alice` from a real browser, restarts the Keycloak Pod, and runs `occ dev down`.                                                                   |
-| Is a chart-topology Keycloak lane (k3d, NetworkPolicy, Pod DNS) worth its cost? | maintainers | Not now: the launcher profile gives the same topology on demand.                                                                                                                                                                    |
-| Keycloak version policy                                                         | maintainers | Pin 26.x by digest; bump with the other pinned images, re-checking the login selectors.                                                                                                                                             |
+| PR                                                                 | Scope                                                | Depends on |
+| ------------------------------------------------------------------ | ---------------------------------------------------- | ---------- |
+| [#1133](https://github.com/openclaw/openclaw-enterprise/pull/1133) | Realm, pinned image, lane and discovery              | `main`     |
+| [#1134](https://github.com/openclaw/openclaw-enterprise/pull/1134) | Real browser sign-in                                 | #1133      |
+| [#1135](https://github.com/openclaw/openclaw-enterprise/pull/1135) | Key rotation and session lifecycle                   | #1134      |
+| [#1136](https://github.com/openclaw/openclaw-enterprise/pull/1136) | Operator guide                                       | #1135      |
+| [#1137](https://github.com/openclaw/openclaw-enterprise/pull/1137) | Persistent local Keycloak and networking             | #1133      |
+| [#1138](https://github.com/openclaw/openclaw-enterprise/pull/1138) | Local sign-in, attachment and launcher qualification | #1137      |
+
+Land parents first and recheck each child against its updated base. The RFC remains proposed and requires a human merge.
+
+<a id="rationale-and-alternatives"></a>
+<a id="risks"></a>
+
+A separate provider lane keeps the Keycloak image pull and JVM startup out of the existing required PostgreSQL auth lane. Using the normal transport also avoids proving a patched request path. Costs remain: about 450 MB to pull, 20–50 seconds to start and roughly 1 GB of memory, selectors tied to the pinned login form, contention for loopback port 443, and persisted realms that require `occ dev down` to pick up a changed fixture.
+
+Other original alternatives remain rejected: `unshare -rn` as the CI design (Ubuntu 24.04 restrictions), a `.localhost` launcher name (Pod loopback), Testcontainers (obscures the selected digest/retry policy), and the dogfood browser workaround (port-forward and special browser launch).
+
+<a id="open-questions"></a>
+
+Human decisions remain:
+
+- **freeqaz:** readiness and the recovery-only/native-administration tradeoff; whether dogfood keeps OIDC enabled, losing embedded-Agent browser chat; and who completes the real-browser CA/hosts check before #1137/#1138 land.
+- **freeqaz:** proposed promotion to required CI after two weeks green on `main` without infrastructure failures, by adding the `ci.yml` `pr-safe` entry and `test-suites.json` `ci` membership.
+- **Maintainers:** the proposed 26.x digest policy, with image bumps and login-selector rechecks; and a separate chart-topology lane, whose original proposed default is “not now” because Local Setup supplies that topology on demand.
+
+Hosted browser coverage does not resolve the human-browser check, and no design acceptance is inferred.
