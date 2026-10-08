@@ -144,8 +144,7 @@ Secret `operate`. Deploy admission
 cannot already read the new revision, and whom no Restriction denies that read,
 exact `agent_revision:read` on it, in the deploy transaction; the API's deploy
 event lists it in `grantedAccessBindings` or names why none was written in
-`revisionReadGrantSkipped`, and an audit
-failure rolls it back with the revision.
+`revisionReadGrantSkipped`, and an audit failure rolls it back with the revision.
 
 State also provides an opt-in Installation authority and native-IAM barrier
 for an original transaction. Its SQL supplier is unregistered, and the

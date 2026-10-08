@@ -698,6 +698,9 @@ export interface DeployAgentAuthorization {
 export type DeployerRevisionReadSkip =
   "already-readable" | "external-iam-policy" | "restricted" | "subject-not-bindable";
 
+/** The skip reasons that carry no Restriction IDs. */
+type DeployerRevisionReadPlainSkip = Exclude<DeployerRevisionReadSkip, "restricted">;
+
 /** The deployer's read grant on the admitted revision, or why admission wrote none. */
 export type DeployerRevisionReadGrant =
   | {
@@ -707,7 +710,7 @@ export type DeployerRevisionReadGrant =
     }
   | {
       readonly grantedAccessBindings: readonly [];
-      readonly revisionReadGrantSkipped: Exclude<DeployerRevisionReadSkip, "restricted">;
+      readonly revisionReadGrantSkipped: DeployerRevisionReadPlainSkip;
       readonly revisionReadRestrictionIds?: undefined;
     }
   | {
@@ -7992,7 +7995,7 @@ export class OpenClawController {
     principalId: string,
     revision: Readonly<AgentRevision>,
   ): Promise<Readonly<DeployerRevisionReadGrant>> {
-    const skipped = (revisionReadGrantSkipped: Exclude<DeployerRevisionReadSkip, "restricted">) =>
+    const skipped = (revisionReadGrantSkipped: DeployerRevisionReadPlainSkip) =>
       Object.freeze({
         grantedAccessBindings: Object.freeze([] as const),
         revisionReadGrantSkipped,
