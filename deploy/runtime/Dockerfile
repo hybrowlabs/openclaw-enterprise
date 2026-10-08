@@ -63,6 +63,10 @@ RUN echo '1d8b670e7029872262375a21da7222768c2fe2390ff7a159ed1616ee9c9de1ca  /tmp
 COPY deploy/runtime/openclaw-connect-ephemeral-expired-setup.patch /tmp/openclaw-connect-ephemeral-expired-setup.patch
 RUN echo 'c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f  /tmp/openclaw-connect-ephemeral-expired-setup.patch' | sha256sum --check --strict \
     && git apply /tmp/openclaw-connect-ephemeral-expired-setup.patch
+# HYBA-2011: the Mattermost plugin's REST and WebSocket calls must follow the operator's HTTPS_PROXY (the channel proxy); upstream dials direct.
+COPY deploy/runtime/openclaw-mattermost-proxy.patch /tmp/openclaw-mattermost-proxy.patch
+RUN echo 'b03ff41afc110a46c15664b71e7d1dc868607a82b56fb91b11ed1c438e73ae74  /tmp/openclaw-mattermost-proxy.patch' | sha256sum --check --strict \
+    && git apply /tmp/openclaw-mattermost-proxy.patch
 COPY scripts/build-runtime-assets.mjs /tmp/build-runtime-assets.mjs
 RUN node /tmp/build-runtime-assets.mjs inputs /source /inputs
 

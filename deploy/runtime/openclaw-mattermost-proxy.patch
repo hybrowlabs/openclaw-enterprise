@@ -1,0 +1,207 @@
+diff -u -r a/extensions/mattermost/src/mattermost/client.test.ts b/extensions/mattermost/src/mattermost/client.test.ts
+--- a/extensions/mattermost/src/mattermost/client.test.ts
++++ b/extensions/mattermost/src/mattermost/client.test.ts
+@@ -94,6 +94,16 @@
+   vi.restoreAllMocks();
+ });
+ 
++describe("Mattermost proxy routing", () => {
++  it("asks the guarded fetch to honor the environment proxy (HTTPS_PROXY) for REST calls", async () => {
++    const { client } = guardedClient(new Response(JSON.stringify({ id: "ch1" }), { headers: jsonHeaders }));
++    await fetchMattermostChannel(client, "ch1");
++    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
++      expect.objectContaining({ mode: "trusted_env_proxy" }),
++    );
++  });
++});
++
+ describe("Mattermost request boundary", () => {
+   it.each([false, true])(
+     "rechecks custom message transports after effect preparation (retired=%s)",
+diff -u -r a/extensions/mattermost/src/mattermost/client.ts b/extensions/mattermost/src/mattermost/client.ts
+--- a/extensions/mattermost/src/mattermost/client.ts
++++ b/extensions/mattermost/src/mattermost/client.ts
+@@ -10,6 +10,7 @@
+   captureChannelReadAuthority,
+   captureEffectAuthority,
+   responseWithRelease,
++  withTrustedEnvProxyGuardedFetchMode,
+ } from "openclaw/plugin-sdk/fetch-runtime";
+ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+ import {
+@@ -248,21 +249,24 @@
+       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+     const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
+     const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
+-    const { response, release } = await fetchWithSsrFGuard({
+-      url,
+-      init: requestInit,
+-      beforeRequest: () => {
+-        assertReadAuthority?.();
+-        assertRequestCurrent?.();
+-        if (isMessagePost) {
+-          postDispatchStarted = true;
+-        }
+-      },
+-      auditContext: "mattermost-api",
+-      policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
+-      signal: requestInit.signal ?? undefined,
+-      timeoutMs,
+-    });
++    // HYBRO: the operator's HTTPS_PROXY (a filtering CONNECT proxy) carries the call; strict mode would dial direct.
++    const { response, release } = await fetchWithSsrFGuard(
++      withTrustedEnvProxyGuardedFetchMode({
++        url,
++        init: requestInit,
++        beforeRequest: () => {
++          assertReadAuthority?.();
++          assertRequestCurrent?.();
++          if (isMessagePost) {
++            postDispatchStarted = true;
++          }
++        },
++        auditContext: "mattermost-api",
++        policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
++        signal: requestInit.signal ?? undefined,
++        timeoutMs,
++      }),
++    );
+     return responseWithRelease(response, release);
+   };
+ 
+diff -u -r a/extensions/mattermost/src/mattermost/monitor-websocket.test.ts b/extensions/mattermost/src/mattermost/monitor-websocket.test.ts
+--- a/extensions/mattermost/src/mattermost/monitor-websocket.test.ts
++++ b/extensions/mattermost/src/mattermost/monitor-websocket.test.ts
+@@ -4,10 +4,11 @@
+ import type { AddressInfo } from "node:net";
+ import { expectDefined } from "@openclaw/normalization-core";
+ import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+-import { beforeEach, describe, expect, it, vi } from "vitest";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import type { RuntimeEnv } from "../../runtime-api.js";
+ import {
+   createMattermostConnectOnce,
++  resolveMattermostWebSocketAgent,
+   type MattermostWebSocketFactory,
+ } from "./monitor-websocket.js";
+ import { runWithReconnect } from "./reconnect.js";
+@@ -837,3 +838,32 @@
+     }
+   });
+ });
++
++describe("mattermost websocket proxy routing", () => {
++  const keys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"] as const;
++  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
++  beforeEach(() => {
++    for (const key of keys) delete process.env[key];
++  });
++  afterEach(() => {
++    for (const key of keys) {
++      if (saved[key] === undefined) delete process.env[key];
++      else process.env[key] = saved[key];
++    }
++  });
++
++  it("uses a proxy agent for wss when HTTPS_PROXY is set", () => {
++    process.env.HTTPS_PROXY = "http://oce-mattermost-proxy.openclaw-system.svc:3128";
++    expect(resolveMattermostWebSocketAgent("wss://chat.example.com/api/v4/websocket")).toBeDefined();
++  });
++
++  it("goes direct when no proxy is configured", () => {
++    expect(resolveMattermostWebSocketAgent("wss://chat.example.com/api/v4/websocket")).toBeUndefined();
++  });
++
++  it("goes direct when NO_PROXY covers the host", () => {
++    process.env.HTTPS_PROXY = "http://oce-mattermost-proxy.openclaw-system.svc:3128";
++    process.env.NO_PROXY = "chat.example.com";
++    expect(resolveMattermostWebSocketAgent("wss://chat.example.com/api/v4/websocket")).toBeUndefined();
++  });
++});
+diff -u -r a/extensions/mattermost/src/mattermost/monitor-websocket.ts b/extensions/mattermost/src/mattermost/monitor-websocket.ts
+--- a/extensions/mattermost/src/mattermost/monitor-websocket.ts
++++ b/extensions/mattermost/src/mattermost/monitor-websocket.ts
+@@ -1,5 +1,6 @@
+ import { randomUUID } from "node:crypto";
+ import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
++import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+ import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+ import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
+ import {
+@@ -127,8 +128,17 @@
+   pongTimeoutMs?: number;
+ };
+ 
++// HYBRO: ws bypasses Node's global proxy agent, so route wss through the operator's HTTPS_PROXY (honors NO_PROXY).
++export function resolveMattermostWebSocketAgent(url: string) {
++  return url.startsWith("wss:")
++    ? createNodeProxyAgent({ mode: "env", targetUrl: url, protocol: "https" })
++    : undefined;
++}
++
+ const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, options) => {
+-  const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
++  const agent =
++    createDebugProxyWebSocketAgent(resolveDebugProxySettings()) ??
++    resolveMattermostWebSocketAgent(url);
+   return new WebSocket(url, {
+     ...options,
+     ...(agent ? { agent } : {}),
+diff -u -r a/extensions/mattermost/src/mattermost/probe.test.ts b/extensions/mattermost/src/mattermost/probe.test.ts
+--- a/extensions/mattermost/src/mattermost/probe.test.ts
++++ b/extensions/mattermost/src/mattermost/probe.test.ts
+@@ -31,6 +31,18 @@
+ }
+ 
+ describe("probeMattermost", () => {
++  it("asks the guarded fetch to honor the environment proxy (HTTPS_PROXY)", async () => {
++    mockFetchGuard.mockResolvedValueOnce({
++      response: new Response(JSON.stringify({ id: "bot1", username: "bot" }), {
++        status: 200,
++        headers: { "content-type": "application/json" },
++      }),
++      release: mockRelease,
++    });
++    await probeMattermost("https://chat.example.com", "token");
++    expect(requireFirstFetchCall()).toMatchObject({ mode: "trusted_env_proxy" });
++  });
++
+   beforeEach(() => {
+     mockFetchGuard.mockReset();
+     mockRelease.mockClear();
+diff -u -r a/extensions/mattermost/src/mattermost/probe.ts b/extensions/mattermost/src/mattermost/probe.ts
+--- a/extensions/mattermost/src/mattermost/probe.ts
++++ b/extensions/mattermost/src/mattermost/probe.ts
+@@ -1,4 +1,5 @@
+ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
++import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+ import {
+@@ -32,15 +33,17 @@
+     async ({ elapsedMs }) => {
+       // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+       const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : undefined;
+-      const { response: res, release } = await fetchWithSsrFGuard({
+-        url,
+-        init: {
+-          headers,
+-        },
+-        auditContext: "mattermost-probe",
+-        policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+-        ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
+-      });
++      const { response: res, release } = await fetchWithSsrFGuard(
++        withTrustedEnvProxyGuardedFetchMode({
++          url,
++          init: {
++            headers,
++          },
++          auditContext: "mattermost-probe",
++          policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
++          ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
++        }),
++      );
+       const requestElapsedMs = elapsedMs();
+       try {
+         if (!res.ok) {

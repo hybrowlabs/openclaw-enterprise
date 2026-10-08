@@ -44,3 +44,22 @@ test("the runtime build can be given an explicit tsdown heap (rootless builders 
     "passed to pnpm build:docker",
   );
 });
+
+test("the Mattermost proxy-routing patch is applied to the pinned OpenClaw source by hash", async () => {
+  const { createHash } = await import("node:crypto");
+  const patch = await readFile(
+    new URL("../../deploy/runtime/openclaw-mattermost-proxy.patch", import.meta.url),
+  );
+  const hash = createHash("sha256").update(patch).digest("hex");
+  assert.match(
+    dockerfile,
+    new RegExp(
+      `COPY deploy/runtime/openclaw-mattermost-proxy\\.patch /tmp/openclaw-mattermost-proxy\\.patch\\nRUN echo '${hash}  /tmp/openclaw-mattermost-proxy\\.patch' \\| sha256sum --check --strict \\\\\\n    && git apply /tmp/openclaw-mattermost-proxy\\.patch`,
+    ),
+    "COPY + sha256 check + git apply, with the current patch hash",
+  );
+  const text = patch.toString("utf8");
+  assert.match(text, /withTrustedEnvProxyGuardedFetchMode/, "REST goes through the env proxy");
+  assert.match(text, /resolveMattermostWebSocketAgent/, "WebSocket goes through the env proxy");
+  assert.doesNotMatch(text, /dangerouslyAllowPrivateNetwork/, "no private-network opt-in");
+});
