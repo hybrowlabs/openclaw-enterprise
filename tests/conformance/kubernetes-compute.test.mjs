@@ -5333,6 +5333,18 @@ test("native channel providers require Secret bindings and project them only to 
         uid: "teams-uid",
       },
     },
+    {
+      name: "MATTERMOST_BOT_TOKEN",
+      namespaceId: tenant.id,
+      agentId,
+      secretId: "sec_00000000-0000-4000-8000-000000000004",
+      backendRef: {
+        namespaceName: namespace,
+        name: "occ-mattermost-bot",
+        key: "value",
+        uid: "mattermost-uid",
+      },
+    },
   ];
   const secretBindings = Object.freeze({
     SLACK_APP_TOKEN: {
@@ -5347,11 +5359,25 @@ test("native channel providers require Secret bindings and project them only to 
       source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[2].secretId },
       delivery: { type: "env" },
     },
+    MATTERMOST_BOT_TOKEN: {
+      source: { kind: "secret", namespaceId: tenant.id, id: secretEnvironment[3].secretId },
+      delivery: { type: "env" },
+    },
   });
 
   for (const [channels, expectedSecrets] of [
     [{ slack: {} }, ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]],
     [{ msteams: { enabled: true } }, ["MSTEAMS_APP_PASSWORD"]],
+    [
+      {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://chat.example.test",
+          botToken: { source: "env", provider: "default", id: "MATTERMOST_BOT_TOKEN" },
+        },
+      },
+      ["MATTERMOST_BOT_TOKEN"],
+    ],
     [
       { slack: { enabled: true }, msteams: { enabled: true } },
       ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MSTEAMS_APP_PASSWORD"],
@@ -5415,6 +5441,7 @@ test("native channel providers require Secret bindings and project them only to 
       "MSTEAMS_APP_PASSWORD",
       "MSTEAMS_APP_ID",
       "MSTEAMS_TENANT_ID",
+      "MATTERMOST_BOT_TOKEN",
     ]) {
       const variable = environment.find(({ name }) => name === key);
       if (expectedSecrets.includes(key)) {

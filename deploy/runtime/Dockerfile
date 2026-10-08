@@ -108,7 +108,7 @@ RUN --mount=type=secret,id=build-ca,required=false \
 COPY --from=openclaw-source /source/ ./
 # Follow the pinned upstream Docker assembly; plugin-local dependencies remain
 # separate when a plugin and core require different versions.
-RUN OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS=codex,slack \
+RUN OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS=codex,mattermost,slack \
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm_config_verify_deps_before_run=false \
     pnpm build:docker \
     && pnpm_config_verify_deps_before_run=false pnpm ui:build
@@ -136,7 +136,7 @@ RUN rm -rf node_modules ui/node_modules \
 FROM openclaw-production-deps AS openclaw-runtime-assets
 COPY --from=openclaw-build-output /source/ ./
 RUN node scripts/postinstall-bundled-plugins.mjs \
-    && OPENCLAW_EXTENSIONS=codex,slack node scripts/prune-docker-plugin-dist.mjs \
+    && OPENCLAW_EXTENSIONS=codex,mattermost,slack node scripts/prune-docker-plugin-dist.mjs \
     && find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete \
     && if [ -L node_modules/@openclaw/ai ]; then \
       target="$(readlink -f node_modules/@openclaw/ai)"; \
@@ -154,7 +154,7 @@ RUN node scripts/postinstall-bundled-plugins.mjs \
 RUN node --input-type=module <<'NODE'
 import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-for (const plugin of ["codex", "slack"]) {
+for (const plugin of ["codex", "mattermost", "slack"]) {
   const root = resolve("dist/extensions", plugin);
   const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   for (const name of Object.keys(manifest.dependencies ?? {})) {
@@ -234,6 +234,7 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && test "$(codex --version)" = "codex-cli ${OPENAI_CODEX_VERSION}" \
   && test -f /app/dist/extensions/codex/openclaw.plugin.json \
   && test -f /app/dist/extensions/slack/openclaw.plugin.json \
+  && test -f /app/dist/extensions/mattermost/openclaw.plugin.json \
   && node /tmp/build-runtime-assets.mjs inventory /app/node_modules/openclaw /opt/oce/runtime \
   && rm /tmp/build-runtime-assets.mjs
 

@@ -201,6 +201,9 @@ const CHANNEL_REQUIREMENTS = {
   msteams: {
     egress: "https-proxy",
   },
+  mattermost: {
+    egress: "https-proxy",
+  },
 } as const;
 
 type ChannelRequirements = (typeof CHANNEL_REQUIREMENTS)[keyof typeof CHANNEL_REQUIREMENTS];
