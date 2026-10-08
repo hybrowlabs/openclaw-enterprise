@@ -160,8 +160,8 @@ sequenceDiagram
   API-->>Member: 200, or 403 when restricted or not bindable
 ```
 
-The diagram shows the proposed flow. #1605 implements it except the
-`restricted` branch, which it must add before it lands.
+The diagram shows the proposed flow. #1605 implements all three branches,
+including `restricted`.
 
 ## Delivery and verification
 
