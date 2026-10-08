@@ -36,7 +36,7 @@ steps. A failure names its step (`Keycloak <step> step failed: ...`).
 1. **image**: pull the pinned image through the bounded `pullImage` retry and
    verify the repository digest.
 2. **port**: fail if anything accepts connections on `127.0.0.1:443`, then
-   reserve a free loopback port for the test's HTTPS Console origin. The realm's
+   select an available loopback port for the test's HTTPS Console origin. The realm's
    redirect URI is `https://127.0.0.1:<port>/api/auth/providers/oidc/callback`.
 3. **placeholders**: generate the client secret, user passwords and Keycloak
    administrator password into a `0600` `secrets.json`; refuse an unset placeholder.
@@ -51,7 +51,7 @@ steps. A failure names its step (`Keycloak <step> step failed: ...`).
    its environment, never the command line.
 7. **readiness**: within 180 seconds, discovery must return the issuer
    `https://keycloak.oce.localhost/realms/oce`, and the admin API must show the
-   generated client secret and the reserved redirect URI. The container's last
+   generated client secret and the selected redirect URI. The container's last
    log lines are printed on failure.
 
 The test process receives `OCC_TEST_KEYCLOAK_*` paths and values and
