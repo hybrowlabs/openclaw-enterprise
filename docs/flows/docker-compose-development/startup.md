@@ -62,10 +62,9 @@ graph TD
 `deploy/runtime/Dockerfile`
 
 The helper requires `bin/occ` (`pnpm cli:build`), accepts `--key-output`, and
-forwards arguments after `--` to Compose. This section traces Docker Compute;
-[step 12](#12-select-kubernetes-development-and-preserve-cleanup-ownership)
-selects Kubernetes Compute, which OpenShell requires. Without a Sandbox Driver,
-Compose Kubernetes startup requires Node before creating resources.
+forwards arguments after `--` to Compose. For Kubernetes Compute, see
+[step 12](#12-select-kubernetes-development-and-preserve-cleanup-ownership).
+Compose Kubernetes startup without a Sandbox Driver requires Node before resources.
 
 Docker Compute probes Engine and Compose JSON support. Failure selects `podman`;
 a `docker` compatibility alias is neither required nor sufficient. Podman needs
@@ -189,11 +188,9 @@ Compose service with Docker-compatible engine access.
 `internal/occdev/gateway_k3d.go:installDevelopmentRoutingControllers`,
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
-Before tool discovery or state creation, `upK3d` requires the control-plane Kubernetes
-namespace name to match a DNS label of at most 63 characters. Cleanup accepts historical,
-longer Namespace names in recorded state and deletes only the validated recorded
-cluster through its recorded engine endpoint; other state and ownership checks
-still apply.
+Before tools or state creation, `upK3d` requires a control-plane Namespace DNS label
+of at most 63 characters. Cleanup accepts longer historical names but retains all
+ownership checks and deletes only the recorded cluster through its recorded endpoint.
 
 Both k3d profiles use legacy iptables and honor an explicit IPv4 node resolver
 without changing host DNS.
@@ -264,16 +261,13 @@ Without OpenShell, the Installation selects the bundled Presets and curated
 Codex Plugin Driver, and startup copies the generated administrator password and
 service key into the private state directory.
 
-When repository inputs are selected, `internal/occdev/repository_k3d.go` first
-validates them. After authenticated bootstrap and Namespace readiness, it
-substitutes the server-assigned Namespace ID into the immutable registry,
-generates a CA and exact-host broker certificate, creates separate Kubernetes
-inputs, and upgrades Helm with the selected Repo Driver and worker sidecar.
-Startup fails unless authenticated repository discovery matches the approved
-references and profiles; it proves no model turn, native sandbox, or Git
-operation. The
-[local repository procedure](../../guides/deploy/local-repository-credentials.md#prepare-the-approved-inputs)
-owns the required inputs.
+For selected repository inputs, `internal/occdev/repository_k3d.go` validates them,
+then waits for authenticated bootstrap and Namespace readiness. It binds the
+server-assigned Namespace ID, generates a CA and exact-host broker certificate,
+creates Kubernetes inputs, and upgrades Helm with the Repo Driver and worker
+sidecar. Authenticated discovery must match approved references and profiles;
+this proves no model turn, native sandbox, or Git operation. See the
+[required repository inputs](../../guides/deploy/local-repository-credentials.md#prepare-the-approved-inputs).
 
 The default `OCC_DEVELOPMENT_CONTROL_PLANE=compose` continues through the
 Compose snapshot and startup sequence. An unsupported control-plane value fails
@@ -303,12 +297,12 @@ cluster's internal load-balancer hostname with TLS verification. It and the
 container configuration are readable by non-root containers behind the private
 host directory and mounted read-only into the API and Kubernetes worker. Neither receives the engine socket.
 
-The lifecycle imports runtime and OpenShell images under engine-recorded names,
-including Podman `localhost/` tags and Docker Hub familiar names. An omitted tag
-makes `internal/occdev/kubernetes.go:engineImageReference` match `:latest` and
-reject missing or ambiguous matches, then resolve the in-cluster digest. Before `writeInstallation`, `internal/occdev/up.go:Up` and
-`internal/occdev/openshell_k3d.go:upK3d` call
-`internal/occdev/status_proxy_k3d.go:developmentStatusProxySource`. Node inventory keeps caller context outside polling.
+Image import uses engine-recorded names, including Podman `localhost/` and Docker
+Hub names. `internal/occdev/kubernetes.go:engineImageReference` treats an omitted
+tag as `:latest`, rejects missing or ambiguous matches, and resolves the in-cluster
+digest. Before `writeInstallation`, both startup paths call
+`internal/occdev/status_proxy_k3d.go:developmentStatusProxySource`; node inventory
+retains caller context outside polling.
 
 `internal/occdev/up.go:poll` bounds route queries to two minutes via `internal/occdev/command.go:command`
 (`exec.CommandContext`), so deadline or cancellation stops blocked queries; default
@@ -335,12 +329,10 @@ owns OpenShell Gateway placement and per-Namespace workspace resources.
 `internal/occdev/down.go:Down`, `internal/occdev/down.go:cleanup`,
 `internal/occdev/state.go:readState`.
 
-Startup launches the API and Kubernetes worker, waits for API health and worker
-readiness, copies bootstrap output to a private temporary file, and reads the
-Installation with `occclient`. Its ID must match the bootstrap response before
-the final key file is written exclusively. With OpenShell, startup waits for the
-bootstrap Kubernetes Namespace and for OCC to report it ready, proving the
-Sandbox Driver created or adopted its operator-mode Workspace.
+After API health and worker readiness, startup copies bootstrap output privately
+and reads the Installation with `occclient`. Its ID must match bootstrap before
+exclusive final-key creation. OpenShell additionally waits for the bootstrap
+Namespace and OCC readiness, proving Workspace creation or adoption.
 Namespace readiness and repository discovery bind each OCC request to the
 polling deadline and caller cancellation via `occclient.Client.WithContext`.
 The original client remains available for later startup operations.
