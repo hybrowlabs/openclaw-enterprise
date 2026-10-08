@@ -392,12 +392,13 @@ export function createDevUpModelProvider({ directory, cluster, environment, run 
               await docker(["network", "disconnect", value.Id, id]);
             }
           }
-          // Remove image tags without force; cached base/registry images are
-          // never registered here and remain on the engine.
+          // Remove owned containers with anonymous storage, and image tags
+          // without forcing deletion or pruning unowned parent images.
           await docker([
             resource.kind,
             "rm",
-            ...(resource.kind === "container" ? ["--force"] : []),
+            ...(resource.kind === "container" ? ["--force", "--volumes"] : []),
+            ...(resource.kind === "image" ? ["--no-prune"] : []),
             resource.kind === "image" ? resource.name : value.Id,
           ]);
         }

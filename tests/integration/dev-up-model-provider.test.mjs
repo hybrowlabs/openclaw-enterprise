@@ -19,6 +19,8 @@ async function scenario(t, { failAfterCreate, failRemove, existingRegistry = fal
   const directory = await mkdtemp(join(tmpdir(), "oce-provider-contract-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const objects = new Map();
+  const anonymousVolumes = new Map();
+  const untaggedParents = new Set(["unowned-parent"]);
   const calls = [];
   const environment = {
     OCC_DEVELOPMENT_CONTAINER_ENGINE: "docker",
@@ -75,6 +77,11 @@ async function scenario(t, { failAfterCreate, failRemove, existingRegistry = fal
         Config: { Labels: { [key]: value } },
         Labels: { [key]: value },
       });
+      // The pinned registry declares VOLUME /var/lib/registry. Docker retains
+      // that anonymous volume unless container removal requests volumes.
+      if (name.endsWith("-registry")) {
+        anonymousVolumes.set(`volume-${name}`, `id-${name}`);
+      }
       if (failAfterCreate && !failedCreate) {
         failedCreate = true;
         throw new Error("creation acknowledgement lost");
@@ -100,7 +107,12 @@ async function scenario(t, { failAfterCreate, failRemove, existingRegistry = fal
             Cmd: ["node"],
             WorkingDir: "/app",
           };
-      objects.set(name, { Id: `id-${name}`, Config: structuredClone(config), RepoDigests: [] });
+      objects.set(name, {
+        Id: `id-${name}`,
+        Config: structuredClone(config),
+        RepoDigests: [],
+        Parent: "unowned-parent",
+      });
       return output("");
     }
     if (args[0] === "push") {
@@ -116,11 +128,30 @@ async function scenario(t, { failAfterCreate, failRemove, existingRegistry = fal
         (name) => name === args.at(-1) || objects.get(name).Id === args.at(-1),
       );
       assert.ok(name);
-      if (failRemove && !failedRemove) {
+      if (failRemove && !failedRemove && (failRemove === true || name.endsWith(failRemove))) {
         failedRemove = true;
         throw new Error("owned deletion failed");
       }
+      const object = objects.get(name);
+      if (args[0] === "container") {
+        assert.equal(args.at(-1), object.Id, "remove the inspected container ID");
+        if (args.includes("--volumes")) {
+          for (const [volume, container] of anonymousVolumes) {
+            if (container === object.Id) {
+              anonymousVolumes.delete(volume);
+            }
+          }
+        }
+      }
       objects.delete(name);
+      // Docker may prune unused untagged ancestors unless removal opts out.
+      if (
+        args[0] === "image" &&
+        !args.includes("--no-prune") &&
+        ![...objects.values()].some((value) => value.Parent === object.Parent)
+      ) {
+        untaggedParents.delete(object.Parent);
+      }
       return output("");
     }
     throw new Error(`Unexpected fixture operation: ${command} ${args.join(" ")}`);
@@ -131,11 +162,30 @@ async function scenario(t, { failAfterCreate, failRemove, existingRegistry = fal
     environment,
     run,
   });
-  return { fixture, directory, calls, objects, environment, events, faults };
+  return {
+    fixture,
+    directory,
+    calls,
+    objects,
+    anonymousVolumes,
+    untaggedParents,
+    environment,
+    events,
+    faults,
+  };
 }
 
 test("provider prepares a scoped immutable image pair and requires a completed turn receipt", async (t) => {
-  const { fixture, directory, environment, calls, objects, events } = await scenario(t);
+  const {
+    fixture,
+    directory,
+    environment,
+    calls,
+    objects,
+    anonymousVolumes,
+    untaggedParents,
+    events,
+  } = await scenario(t);
   const before = { ...environment };
   const images = await fixture.prepare();
   assert.deepEqual(environment, before, "caller and global environment must not be mutated");
@@ -177,8 +227,15 @@ test("provider prepares a scoped immutable image pair and requires a completed t
     status: 200,
     transport: "https",
   });
+  assert.equal(anonymousVolumes.size, 1);
   await fixture.cleanup();
   assert.equal(objects.size, 0);
+  assert.equal(anonymousVolumes.size, 0, "successful cleanup must not orphan registry storage");
+  assert.deepEqual([...untaggedParents], ["unowned-parent"]);
+  assert.deepEqual(
+    JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources,
+    [],
+  );
   assert.ok(
     calls
       .filter(({ args }) => args[0] === "image" && args[1] === "rm")
@@ -187,15 +244,23 @@ test("provider prepares a scoped immutable image pair and requires a completed t
 });
 
 test("provider reconciles a creation whose acknowledgement was lost", async (t) => {
-  const { fixture, directory, objects } = await scenario(t, { failAfterCreate: true });
+  const { fixture, directory, objects, anonymousVolumes } = await scenario(t, {
+    failAfterCreate: true,
+  });
   await assert.rejects(fixture.prepare(), /acknowledgement lost/);
   assert.equal(objects.size, 1);
+  assert.equal(anonymousVolumes.size, 1);
   assert.equal(
     JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources.length,
     1,
   );
   await fixture.cleanup();
   assert.equal(objects.size, 0);
+  assert.equal(anonymousVolumes.size, 0, "lost creation acknowledgement must not orphan storage");
+  assert.deepEqual(
+    JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources,
+    [],
+  );
 });
 
 test("provider leaves pre-existing resources untouched", async (t) => {
@@ -217,6 +282,30 @@ test("provider retains failed cleanup obligations and retries only the remainder
   assert.equal(objects.size, 1);
   await fixture.cleanup();
   assert.equal(objects.size, 0);
+  assert.deepEqual(
+    JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources,
+    [],
+  );
+});
+
+test("provider retains registry storage and its recovery obligation until removal succeeds", async (t) => {
+  const { fixture, directory, objects, anonymousVolumes } = await scenario(t, {
+    failRemove: "-registry",
+  });
+  await fixture.prepare();
+  const storage = [...anonymousVolumes];
+  assert.equal(storage.length, 1);
+  await assert.rejects(fixture.cleanup(), /recovery journal retained/);
+  const remaining = JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources;
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].kind, "container");
+  assert.match(remaining[0].name, /-registry$/);
+  assert.equal(objects.size, 1);
+  assert.equal(objects.get(remaining[0].name).Id, storage[0][1]);
+  assert.deepEqual([...anonymousVolumes], storage);
+  await fixture.cleanup();
+  assert.equal(objects.size, 0);
+  assert.equal(anonymousVolumes.size, 0, "retry must remove the retained registry storage");
   assert.deepEqual(
     JSON.parse(await readFile(join(directory, "resources.json"), "utf8")).resources,
     [],

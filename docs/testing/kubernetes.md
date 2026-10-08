@@ -5,9 +5,9 @@ Kubernetes HTTP fixtures or real-runtime gateway, Codex, model, and Secret tests
 
 ## Local Kubernetes installation
 
-Build the CLI and prepare sandbox-capable Chromium using the
-[browser setup](local.md#console-browser-checks). The six cases create disposable
-k3d clusters on Docker. Keycloak requires exclusive, bindable loopback port 443.
+Build the CLI; prepare sandboxed Chromium using the
+[browser setup](local.md#console-browser-checks). Run six k3d cases on an owned,
+disposable Docker engine. Keycloak requires exclusive, bindable loopback port 443.
 
 ```sh
 pnpm exec playwright install chromium
