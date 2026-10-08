@@ -107,7 +107,9 @@ login-form selectors used by later sign-in tests are tied to that version.
 
 The `dev-up-k3d` lane owns two additional cases in
 [`dev-up-k3d-real.test.mjs`](../../tests/integration/dev-up-k3d-real.test.mjs).
-They are distinct from this page's standalone discovery/JWKS fixture.
+They run through the CLI-only lane, outside automatic CI and Full Integration
+dispatch. Prepare the CLI and Chromium with the
+[local installation setup](kubernetes.md#local-kubernetes-installation) first.
 
 ```sh
 OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs

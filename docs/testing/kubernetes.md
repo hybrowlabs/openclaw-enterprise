@@ -5,10 +5,13 @@ Kubernetes HTTP fixtures or real-runtime gateway, Codex, model, and Secret tests
 
 ## Local Kubernetes installation
 
-Build the CLI and run the selected real test to create and clean up a separate
-k3d cluster:
+Prepare the browser and build the CLI before running the six real cases, which
+create and clean up separate k3d clusters. Use an owned disposable engine and
+reserve exclusive, bindable loopback port 443 for the Keycloak cases. Chromium
+must run with its sandbox enabled; see [browser setup](local.md#console-browser-checks).
 
 ```sh
+pnpm exec playwright install chromium
 pnpm cli:build
 OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs
 ```
