@@ -97,6 +97,90 @@ export class DependencyUnavailableError extends AuthorizationDeniedError {
 }
 
 /**
+ * A Secret the selected Secret Driver cannot serve, typically one stored through a driver the
+ * Installation no longer selects. Each subclass is raised only after the caller's grant and the
+ * Secret lookup, so it reveals nothing a 403 or 404 hides, and carries a fixed message naming
+ * the fix for its own path. HTTP returns that message; every other 503 keeps the generic text.
+ */
+export abstract class SecretDriverOwnershipError extends DependencyUnavailableError {}
+
+/**
+ * A Configuration Secret binding the selected Secret Driver cannot serve. Only a Configuration
+ * write can replace the binding, so the fixed message says so.
+ */
+export class SecretBindingDriverError extends SecretDriverOwnershipError {
+  constructor() {
+    super(
+      "The selected Secret Driver does not own a Secret the Configuration binds. Bind only Secrets stored through the selected driver: update the Configuration's secretBindings, or assign the Agent another Configuration.",
+    );
+    this.name = "SecretBindingDriverError";
+  }
+}
+
+/**
+ * An Agent's requested or bound Harness authentication Secret the selected Secret Driver cannot
+ * serve. The Agent's `harnessAuth` must name another Secret.
+ */
+export class HarnessAuthSecretDriverError extends SecretDriverOwnershipError {
+  constructor() {
+    super(
+      "The selected Secret Driver does not own the Harness authentication Secret. Bind a Secret stored through the selected driver: set harnessAuth to another Secret, or create a new Secret with the key and bind that.",
+    );
+    this.name = "HarnessAuthSecretDriverError";
+  }
+}
+
+/**
+ * A Secret an Agent provisioning request or its accepted work uses that the selected Secret
+ * Driver cannot serve. Accepted work keeps its inputs, so only a new request can replace it.
+ */
+export class ProvisioningSecretDriverError extends SecretDriverOwnershipError {
+  constructor() {
+    super(
+      "The selected Secret Driver does not own a Secret this Agent provisioning uses. Use only Secrets stored through the selected driver: save replacement Secrets and submit a new provisioning request with them.",
+    );
+    this.name = "ProvisioningSecretDriverError";
+  }
+}
+
+const SECRET_STORAGE_DRIVER_MESSAGES = Object.freeze({
+  update:
+    "The selected Secret Driver does not own this Secret, so its value cannot be updated. Create a new Secret with the value through the selected driver and bind it in place of this one.",
+  delete:
+    "The selected Secret Driver does not own this Secret, so its stored value cannot be deleted. Delete it once the Installation again selects the Secret Driver that stored it.",
+});
+
+/**
+ * An exact Secret update or delete the selected Secret Driver cannot perform: OCC never writes or
+ * removes a value through a driver that does not own it.
+ */
+export class SecretStorageDriverError extends SecretDriverOwnershipError {
+  readonly operation: keyof typeof SECRET_STORAGE_DRIVER_MESSAGES;
+
+  constructor(operation: keyof typeof SECRET_STORAGE_DRIVER_MESSAGES) {
+    super(SECRET_STORAGE_DRIVER_MESSAGES[operation]);
+    this.name = "SecretStorageDriverError";
+    this.operation = operation;
+  }
+}
+
+/**
+ * A credential source registered through a Credential Gateway Driver the Installation no longer
+ * selects. OCC never binds, deploys, updates or deletes a source through a driver that did not
+ * register it. Raised only after the caller's grant and the source lookup, so it reveals nothing
+ * a 403 or 404 hides; one fixed message names the fix on every path. An Installation with no
+ * Credential Gateway, or a selected one that is unusable, is not this error.
+ */
+export class CredentialSourceDriverError extends DependencyUnavailableError {
+  constructor() {
+    super(
+      "The selected Credential Gateway Driver did not register this credential source. Bind a replacement registered through the selected driver instead. To update or delete this source, an administrator must first re-select the driver that registered it.",
+    );
+    this.name = "CredentialSourceDriverError";
+  }
+}
+
+/**
  * A running Agent has no active revision yet (its first deployment, or a redeploy after a
  * stop, is still activating). A lifecycle state, not an outage; it stays a
  * DependencyUnavailableError so callers that need a revision still answer 503.
@@ -185,6 +269,19 @@ export class ConfigurationHarnessError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
     this.name = "ConfigurationHarnessError";
+  }
+}
+
+/**
+ * An Agent's `harnessAuth` names a credential source its `credentialSources` list does not
+ * hold. OCC raises it only after every source authorization, and the rule depends only on
+ * the request and the Agent the caller may already update, so HTTP reports it as an invalid
+ * request instead of hiding it as a scope miss.
+ */
+export class AgentCredentialSourceBindingError extends ScopeViolationError {
+  constructor() {
+    super("The Harness credential source must be listed in the Agent's credentialSources.");
+    this.name = "AgentCredentialSourceBindingError";
   }
 }
 
@@ -572,6 +669,23 @@ export class SandboxRevisionUnsupportedError extends Error {
   constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
     super(message);
     this.name = "SandboxRevisionUnsupportedError";
+    this.code = code;
+  }
+}
+
+/**
+ * A Credential Gateway cannot attach this exact AgentRevision's credential sources: two of them
+ * would place their placeholders in the same Sandbox environment variable. The revision's
+ * source list and each source's config are fixed, so retrying cannot change the outcome; the
+ * worker fails the deployment with `code`. The message stays in the controller; status shows a
+ * fixed text.
+ */
+export class CredentialSourceRevisionError extends Error {
+  readonly code: "CREDENTIAL_SOURCE_ENVIRONMENT_CONFLICT";
+
+  constructor(code: CredentialSourceRevisionError["code"], message: string) {
+    super(message);
+    this.name = "CredentialSourceRevisionError";
     this.code = code;
   }
 }

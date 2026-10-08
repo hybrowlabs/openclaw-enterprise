@@ -1755,7 +1755,7 @@ Create a Namespace-owned Agent
 
 **Operation ID:** `createAgent`
 
-**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected.
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource listed in credentialSources or named by a credential-source harnessAuth.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -1763,6 +1763,7 @@ Create a Namespace-owned Agent
 | `read` | `configuration` | `requested` |
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
+| `operate` | `credential_source` | `request_body` (when bound) |
 
 ##### Parameters
 
@@ -2606,7 +2607,7 @@ Replace an exact Namespace-owned Agent's editable draft
 
 **Operation ID:** `updateAgent`
 
-**Permissions:** Requires update permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected.
+**Permissions:** Requires update permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource the Agent lists or names in harnessAuth, before and after the update.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -2614,6 +2615,7 @@ Replace an exact Namespace-owned Agent's editable draft
 | `read` | `configuration` | `requested` |
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
+| `operate` | `credential_source` | `requested` (when bound) |
 
 ##### Parameters
 
@@ -2811,7 +2813,7 @@ Admit an immutable revision from the Agent's saved draft
 
 **Operation ID:** `deployAgent`
 
-**Permissions:** Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires operate permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret.
+**Permissions:** Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires operate permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource the Agent lists or names in harnessAuth. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret and on each CredentialSource the Agent lists.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -2821,6 +2823,7 @@ Admit an immutable revision from the Agent's saved draft
 | `operate` | `agent` | `requested` |
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
+| `operate` | `credential_source` | `requested` (when bound) |
 
 ##### Parameters
 
@@ -4402,11 +4405,12 @@ Register a credential source with the selected Credential Gateway
 
 **Operation ID:** `createCredentialSource`
 
-**Permissions:** Requires create permission for CredentialSource resources in the requested Namespace.
+**Permissions:** Requires create permission for CredentialSource resources in the requested Namespace. Requires operate permission on each Secret named in the request body secrets.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `create` | `credential_source` | `namespace` |
+| `operate` | `secret` | `request_body` (when bound) |
 
 ##### Parameters
 
@@ -4561,11 +4565,12 @@ Push current or replacement Secret values to the Credential Gateway copy
 
 **Operation ID:** `updateCredentialSource`
 
-**Permissions:** Requires update permission on the requested CredentialSource.
+**Permissions:** Requires update permission on the requested CredentialSource. Requires operate permission on each Secret the source references after the update, including its current references when the request omits secrets.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `update` | `credential_source` | `requested` |
+| `operate` | `secret` | `requested` (when bound) |
 
 ##### Parameters
 

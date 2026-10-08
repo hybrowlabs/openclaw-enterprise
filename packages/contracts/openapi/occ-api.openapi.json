@@ -12251,7 +12251,7 @@
         ]
       },
       "post": {
-        "description": "Requires create permission for Agent resources in the requested Namespace. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected.",
+        "description": "Requires create permission for Agent resources in the requested Namespace. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource listed in credentialSources or named by a credential-source harnessAuth.",
         "operationId": "createAgent",
         "parameters": [
           {
@@ -12918,6 +12918,12 @@
             "condition": "bound_secret",
             "resourceKind": "secret",
             "scope": "requested"
+          },
+          {
+            "action": "operate",
+            "condition": "bound_credential_source",
+            "resourceKind": "credential_source",
+            "scope": "request_body"
           }
         ]
       }
@@ -15949,7 +15955,7 @@
         ]
       },
       "patch": {
-        "description": "Requires update permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected.",
+        "description": "Requires update permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource the Agent lists or names in harnessAuth, before and after the update.",
         "operationId": "updateAgent",
         "parameters": [
           {
@@ -16594,6 +16600,12 @@
             "condition": "bound_secret",
             "resourceKind": "secret",
             "scope": "requested"
+          },
+          {
+            "action": "operate",
+            "condition": "bound_credential_source",
+            "resourceKind": "credential_source",
+            "scope": "requested"
           }
         ]
       }
@@ -16926,7 +16938,7 @@
     },
     "/namespaces/{namespaceId}/agents/{agentId}/deploy": {
       "post": {
-        "description": "Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires operate permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret.",
+        "description": "Requires deploy permission on the requested Agent. Requires read permission on the requested Configuration. Requires read permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires operate permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each bound Secret when Secret bindings are present or selected. Requires operate permission on each CredentialSource the Agent lists or names in harnessAuth. Deployment also requires the owning Agent service principal to have operate permission on each bound Secret and on each CredentialSource the Agent lists.",
         "operationId": "deployAgent",
         "parameters": [
           {
@@ -17361,6 +17373,12 @@
             "action": "operate",
             "condition": "bound_secret",
             "resourceKind": "secret",
+            "scope": "requested"
+          },
+          {
+            "action": "operate",
+            "condition": "bound_credential_source",
+            "resourceKind": "credential_source",
             "scope": "requested"
           }
         ]
@@ -23431,7 +23449,7 @@
         ]
       },
       "post": {
-        "description": "Requires create permission for CredentialSource resources in the requested Namespace.",
+        "description": "Requires create permission for CredentialSource resources in the requested Namespace. Requires operate permission on each Secret named in the request body secrets.",
         "operationId": "createCredentialSource",
         "parameters": [
           {
@@ -23564,7 +23582,13 @@
         "summary": "Register a credential source with the selected Credential Gateway",
         "tags": ["Credential sources"],
         "x-openclaw-permissions": [
-          { "action": "create", "resourceKind": "credential_source", "scope": "namespace" }
+          { "action": "create", "resourceKind": "credential_source", "scope": "namespace" },
+          {
+            "action": "operate",
+            "condition": "bound_secret",
+            "resourceKind": "secret",
+            "scope": "request_body"
+          }
         ]
       }
     },
@@ -23717,7 +23741,7 @@
         ]
       },
       "patch": {
-        "description": "Requires update permission on the requested CredentialSource.",
+        "description": "Requires update permission on the requested CredentialSource. Requires operate permission on each Secret the source references after the update, including its current references when the request omits secrets.",
         "operationId": "updateCredentialSource",
         "parameters": [
           {
@@ -23841,7 +23865,13 @@
         "summary": "Push current or replacement Secret values to the Credential Gateway copy",
         "tags": ["Credential sources"],
         "x-openclaw-permissions": [
-          { "action": "update", "resourceKind": "credential_source", "scope": "requested" }
+          { "action": "update", "resourceKind": "credential_source", "scope": "requested" },
+          {
+            "action": "operate",
+            "condition": "bound_secret",
+            "resourceKind": "secret",
+            "scope": "requested"
+          }
         ]
       }
     },
