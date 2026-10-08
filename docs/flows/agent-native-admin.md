@@ -1,7 +1,7 @@
 ---
 created: "2026-09-19"
 updated: "2026-10-08"
-last_updated_session: "authoring-run/1e4aaf85-2e38-434d-99c0-75881fe9991c"
+last_updated_session: authoring-run/5f9fde5c-b06d-4572-b39d-9cbeff312f38
 ---
 
 # Agent Native Admin UI Flow
@@ -120,8 +120,10 @@ routes. For Agent hosts, OCC authenticates the shared session cookie, resolves
 the selected IAM identity, resolves the requested host to the exact Agent,
 revalidates exact Agent `administer`, selects the current active revision, and
 validates native configuration support before proxying. Attributable IAM denials
-during proxy admission preserve an IAM denial audit for the human session and
-exact Agent instead of becoming unaudited dependency failures.
+during proxy admission trigger one audit append attempt for the human session and
+exact Agent. The admission owner consumes late denials even after the five-second
+response deadline, client disconnect or shutdown wait. Timely HTTP denials retain
+`403`; a failed append or admission timeout returns `503`.
 
 Admission reads Better Auth once and returns the verified session metadata with
 the caller identity. The status and proxy paths reuse that result to check
@@ -136,11 +138,18 @@ The HTTP proxy canonicalizes a bounded path suffix, rejects missing or nonmatchi
 
 `apps/controller/src/http/native-admin.ts:handleNativeAdminUpgrade`
 
-The API process intercepts `upgrade` before Fastify routing. It accepts only derived Agent hosts and tracks active sockets so `preClose` destroys them during shutdown. Before awaiting shared-session and exact-Agent admission, it handles client socket errors; a TCP reset during admission therefore does not raise an uncaught socket error. An exact-Agent authorization denial still records its attributable audit after a reset. An allowed admission checks whether the client socket was destroyed before and after resolving the private transport context, so a disconnected client does not open a gateway connection. A connected client proceeds with the selected active revision.
+The API process intercepts `upgrade` before Fastify routing. It accepts only derived Agent hosts and tracks active sockets so `preClose` destroys them during shutdown. Before awaiting shared-session and exact-Agent admission, it handles client socket errors; a TCP reset during admission therefore does not raise an uncaught socket error. A refused socket closes without waiting for its attributable denial audit. An allowed admission checks for client destruction and shutdown before and after resolving the private transport context; late success cannot open a gateway connection. A connected client proceeds with the selected active revision.
 
 `apps/controller/src/gateway/native-admin-proxy.ts:proxyNativeAdminWebSocket`
 
-The WebSocket proxy requires a non-null exact Agent `Origin`, forwards a sanitized upgrade request to the private `https:` gateway base, and only connects the browser after the upstream returns `101`. `onConnect` appends `openclaw.agents.native_admin.websocket.connect`; `onClose` appends `openclaw.agents.native_admin.websocket.close`. The `websocket.connect` audit record includes `connectionId`; the matching `websocket.close` audit record reuses that `connectionId` and includes `closeReason`, whose value distinguishes lifecycle, revocation, dependency, client, upstream, and shutdown paths. A timer rechecks the shared-session admission path every 25 seconds, with each lease bounded to 5 seconds. Failed, denied, timed-out, or revision-changed lease checks close both sockets and preserve the IAM denial audit when authorization is the reason. An authorized reconnect uses the current active revision. Native chat does not renew the OCE session.
+The WebSocket proxy requires a non-null exact Agent `Origin`, forwards a sanitized upgrade request to the private `https:` gateway base, and only connects the browser after the upstream returns `101`. `onConnect` appends `openclaw.agents.native_admin.websocket.connect`; `onClose` appends `openclaw.agents.native_admin.websocket.close`. The `websocket.connect` audit record includes `connectionId`; the matching `websocket.close` audit record reuses that `connectionId` and includes `closeReason`, whose value distinguishes lifecycle, revocation, dependency, client, upstream, and shutdown paths. A timer rechecks the shared-session admission path every 25 seconds, with each lease bounded to 5 seconds. Failed, denied, timed-out, or revision-changed lease checks close both sockets. Denial closure does not wait for append; a late attributable lease denial still triggers its single audit attempt. An authorized reconnect uses the current active revision. Native chat does not renew the OCE session.
+
+Admission remains tracked through its audit attempt, alongside close audits.
+Shutdown gives that work one five-second drain wait, including an admission that
+becomes an append during the wait. Expiry logs `native_admin.pending_work_unresolved`
+with the pending count and retains ownership until settlement while the process
+lives. This wait does not cancel producers or guarantee durable delivery. Stalled
+work can accumulate, and process exit can prevent or interrupt an audit attempt.
 
 ### 8. Runtime renders HTML on a separate origin
 
@@ -194,6 +203,8 @@ The init container cannot write through the gateway's later mount path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-08 06:22: Track admission through denial audit, close refused sockets promptly, and document bounded shutdown waiting with unresolved work. (authoring-run/5f9fde5c-b06d-4572-b39d-9cbeff312f38 - 5b82d7898d6880c32c0d45d96dcd1016056f1e13)
 
 - 2026-10-08 03:40: Documented client reset handling during native-admin WebSocket admission and the denial-audit and upstream-connection ordering at inspected revision `002d0f796`. (authoring-run/1e4aaf85-2e38-434d-99c0-75881fe9991c - 002d0f79639a9c814eb1fa2799530516a6c90cde)
 
