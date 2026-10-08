@@ -449,12 +449,11 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
           await appendNativeAdminProxyDenialAudit(admission);
           return true;
         } catch {
-          app.log.warn({
-            event:
-              kind === "http"
-                ? "native_admin.http_denial_audit_failed"
-                : "native_admin.websocket_denial_audit_failed",
-          });
+          if (kind === "http") {
+            app.log.warn({ event: "native_admin.http_denial_audit_failed" });
+          } else {
+            app.log.warn({ event: "native_admin.websocket_denial_audit_failed" });
+          }
           return false;
         }
       },

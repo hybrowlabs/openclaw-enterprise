@@ -1,7 +1,7 @@
 ---
 created: 2026-09-02
-updated: 2026-10-01
-last_updated_session: authoring-run/dda71266-f9f6-404c-aaba-b0c03f010ae2
+updated: 2026-10-08
+last_updated_session: authoring-run/59df3b19-e8b1-4175-b654-36cb73c2234b
 ---
 
 # Common Operational Logging Flow
@@ -195,8 +195,11 @@ and its bounded failure (such as `TimeoutError`) as `occ.device_authorization.fa
 resource and Kubernetes namespace stay local. `agent_provisioning.compute_refused` (the
 Compute Driver refused a provisioning plan for a reason the caller cannot fix) keeps only
 `request.id`; the Driver's reason stays local. `native_admin.websocket_audit_failed`
-keeps the Namespace, Agent and revision IDs, and `native_admin.websocket_denial_audit_failed`
-carries none. `authentication.activation-warning`, `authentication.password-sign-in-warning`
+keeps the Namespace, Agent and revision IDs. `native_admin.http_denial_audit_failed` and
+`native_admin.websocket_denial_audit_failed` carry no request, user, error or payload fields.
+`native_admin.pending_work_unresolved` keeps only its nonnegative safe-integer count as
+`occ.native_admin.pending`; invalid counts are omitted. Transport-derived identity remains.
+`authentication.activation-warning`, `authentication.password-sign-in-warning`
 and `authentication.recovery-seed-warning` keep at most `occ.code`; account IDs and
 messages stay local.
 `presets.default-refresh-skipped` (a default Preset copy kept because policy refused
@@ -255,6 +258,7 @@ for panels, correlation, and authorization limits.
 
 ## Changelog
 
+- 2026-10-08 12:55: Export both native-admin denial-audit failure events without caller context and document the bounded pending-work count. (authoring-run/59df3b19-e8b1-4175-b654-36cb73c2234b - f51dc0c9)
 - 2026-10-06 13:30: Export `agent_provisioning.compute_refused`, the API warning that names a Compute provisioning refusal by request ID.
 - 2026-10-06 06:30: Export the API shutdown, idle database connection, device login, cluster credential denial, native admin audit failure and authentication startup warnings that other pages tell operators to look for.
 - 2026-10-05 05:30: Note that the Preset startup warnings come only from the API.

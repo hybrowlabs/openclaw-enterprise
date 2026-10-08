@@ -275,9 +275,26 @@ async function exportedOccEventPattern() {
   return new RegExp(pattern.replaceAll("$$", "$"));
 }
 
-test("the Collector bounds the native-admin pending-work diagnostic", async () => {
+test("the Collector exports bounded native-admin audit diagnostics", async () => {
   const event = "native_admin.pending_work_unresolved";
   const pattern = await exportedOccEventPattern();
+  // A computed event field hid both denial names from the documented-event inventory.
+  const source = await readFile(join(root, "apps/controller/src/http/native-admin.ts"), "utf8");
+  const emitted = new Set(
+    [...source.matchAll(/\bevent: "([a-z_]+[.][a-z_.-]+)"/g)].map(([, name]) => name),
+  );
+  const flow = await readFile(join(root, "docs/flows/common-logging.md"), "utf8");
+  for (const denial of [
+    "native_admin.http_denial_audit_failed",
+    "native_admin.websocket_denial_audit_failed",
+  ]) {
+    assert.ok(emitted.has(denial), `${denial} is visible to the event inventory`);
+    assert.ok(flow.includes(`\`${denial}\``), `${denial} is documented`);
+    assert.ok(pattern.test(denial), `${denial} reaches the backend`);
+    for (const name of [`${denial}.detail`, `${denial}-unreviewed`]) {
+      assert.equal(pattern.test(name), false, "nearby unreviewed diagnostics stay local");
+    }
+  }
   assert.ok(pattern.test(event), "the documented shutdown diagnostic reaches the backend");
   for (const name of [`${event}.detail`, `${event}-unreviewed`, "native_admin.other_event"]) {
     assert.equal(pattern.test(name), false, "nearby unreviewed diagnostics stay local");
@@ -1391,7 +1408,31 @@ test(
                 agentId,
                 revisionId,
               }),
-              line({ severity: "WARN", event: "native_admin.websocket_denial_audit_failed" }),
+              // Both denial paths export the fixed event, never supplied caller or error fields.
+              ...[
+                "native_admin.http_denial_audit_failed",
+                "native_admin.websocket_denial_audit_failed",
+              ].map((event) =>
+                line({
+                  severity: "WARN",
+                  event,
+                  requestId,
+                  namespaceId,
+                  agentId,
+                  revisionId,
+                  code: "UNREVIEWED_EXTRA",
+                  pending: 7,
+                  userId: canary,
+                  headers: { authorization: canary },
+                  error: { message: canary, stack: canary },
+                  payload: { private: canary },
+                }),
+              ),
+              line({ severity: "WARN", event: "native_admin.http_denial_audit_failed.detail" }),
+              line({
+                severity: "WARN",
+                event: "native_admin.websocket_denial_audit_failed-unreviewed",
+              }),
               // Shutdown exports only its bounded pending count; payloads and identities stay local.
               ...[
                 0,
@@ -1534,6 +1575,7 @@ test(
           "occ.agent.id": agentId,
           "occ.revision.id": revisionId,
         }),
+        api("WARN", { "event.name": "native_admin.http_denial_audit_failed" }),
         api("WARN", { "event.name": "native_admin.websocket_denial_audit_failed" }),
         ...["0", "7", "9007199254740991"].map((pending) =>
           api("WARN", {
