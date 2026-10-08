@@ -11,6 +11,7 @@ import test, { before } from "node:test";
 import { promisify } from "node:util";
 import { devUpUnrelatedImage, prepareDevUpImage } from "../../scripts/ci/prepare.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
+import { createDevUpModelProvider } from "../helpers/dev-up-model-provider.mjs";
 
 const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
   "@kubernetes/client-node",
@@ -231,6 +232,19 @@ test(
       OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "600",
     };
     delete environment.OCC_DEVELOPMENT_SANDBOX_DRIVER;
+    for (const key of [
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEY_FILE",
+      "CODEX_API_KEY",
+      "CODEX_API_KEY_FILE",
+    ]) {
+      delete environment[key];
+    }
+    const provider = createDevUpModelProvider({
+      directory: join(root, "provider"),
+      cluster,
+      environment,
+    });
     // Cleanup uses the recorded engine and cluster; failed cleanup preserves recovery state.
     t.after(async () => {
       if (existsSync(stateDirectory)) {
@@ -249,8 +263,14 @@ test(
           );
         }
       }
+      await provider.cleanup();
       await rm(root, { recursive: true, force: true });
     });
+    Object.assign(environment, await provider.prepare());
+    // The fixture and launcher use the same pinned local engine socket.
+    delete environment.DOCKER_CONTEXT;
+    delete environment.DOCKER_TLS_VERIFY;
+    delete environment.DOCKER_CERT_PATH;
 
     // This invokes the regular launcher and real Helm, PostgreSQL, API, and worker.
     const started = await execute(join(repository, "scripts", "dev-up"), [], {
@@ -265,6 +285,9 @@ test(
     assert.equal(state.cluster, cluster);
     assert.equal(state.deploymentMode, "k3d");
     assert.equal(state.sandboxDriver, "none");
+    // Route only this owned cluster, and await both provider and controller
+    // Service DNS before any Agent can make its native startup model request.
+    await provider.route(stateDirectory);
     assert.equal(existsSync(join(stateDirectory, "compose.yaml")), false);
     for (const file of ["initial-admin-password", "initial-admin-service-key.json"]) {
       assert.equal((await stat(join(stateDirectory, file))).mode & 0o077, 0);
@@ -369,7 +392,8 @@ test(
       catalog.data.plugins.some(({ id }) => id === "codex-plugin:linear@openai-curated-remote"),
     );
     // Provision the shipped dedicated Codex Preset through the same API used by
-    // the console. The synthetic Secret permits startup but cannot run a model.
+    // the console. Its native startup turn must complete against the deterministic
+    // Responses fixture using a synthetic Secret; this is not live model inference.
     const { renderPresetTemplate } = await import("../../packages/contracts/src/index.ts");
     const preset = presets.data.find(({ name }) => name === "Standard Codex");
     const rendered = renderPresetTemplate(preset.template, {
@@ -439,6 +463,9 @@ test(
       await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
     }
     assert.ok(deployment, "Agent deployment did not activate");
+    t.diagnostic(
+      `Dedicated startup provider receipt: ${JSON.stringify(await provider.assertAnswered())}`,
+    );
 
     const kubeArgs = [
       "--kubeconfig",
