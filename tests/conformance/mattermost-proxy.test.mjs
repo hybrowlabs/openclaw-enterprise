@@ -152,3 +152,33 @@ test("a refused CONNECT that the client resets leaves the proxy running", option
   }
   assert.match(await connect(port, "example.com:443"), /^HTTP\/1\.1 403 Forbidden/);
 });
+
+test("the proxy starts when launched through a symlink (a Kubernetes ConfigMap mount)", options, async (t) => {
+  const { mkdtemp, symlink, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawn } = await import("node:child_process");
+  const directory = await mkdtemp(join(tmpdir(), "mattermost-proxy-link-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const link = join(directory, "mattermost-proxy.mjs");
+  await symlink(new URL("../../apps/controller/src/mattermost-proxy.mjs", import.meta.url).pathname, link);
+  const child = spawn(process.execPath, [link], {
+    env: { ...process.env, OCC_MATTERMOST_PROXY_ALLOWED_HOST: "chat.hybrowlabs.com", OCC_MATTERMOST_PROXY_PORT: "0" },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  t.after(() => child.kill());
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  const port = await bound(
+    new Promise((resolve, reject) => {
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+        const match = /Mattermost proxy listening on (\d+) for chat\.hybrowlabs\.com:443/.exec(stderr);
+        if (match) resolve(Number(match[1]));
+      });
+      child.once("close", (code) => reject(new Error(`proxy exited ${code} without listening: ${stderr}`)));
+    }),
+    "proxy start through a symlink",
+  );
+  assert.match(await connect(port, "example.com:443"), /^HTTP\/1\.1 403 Forbidden/);
+});

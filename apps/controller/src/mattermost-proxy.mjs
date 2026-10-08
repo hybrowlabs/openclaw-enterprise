@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import net from "node:net";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // HTTP CONNECT proxy for exactly one Mattermost host on port 443 (HYBA-2011). Derived from slack-proxy.mjs;
@@ -111,7 +112,16 @@ export function createMattermostProxyServer({
   return server;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// A ConfigMap mount is a symlink, so compare resolved paths.
+function isMain() {
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const allowedHost = parseAllowedHost(process.env.OCC_MATTERMOST_PROXY_ALLOWED_HOST);
   const port = parsePort(process.env.OCC_MATTERMOST_PROXY_PORT);
   const server = createMattermostProxyServer({ allowedHost });
