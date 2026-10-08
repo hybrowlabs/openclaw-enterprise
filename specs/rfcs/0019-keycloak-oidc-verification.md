@@ -90,7 +90,7 @@ changes both.
 
 A guide child page, `docs/guides/deploy/oidc-keycloak.md`, linked from the IdP table, gives
 the pinned major version (26), the realm recipe as admin-console steps, where `sub` is shown,
-and the constraints the lane enforces:
+and the provider constraints:
 
 - The realm's default `RS256` key is 2,048 bits or more.
 - The client has no audience mapper: a Keycloak ID token's `aud` is the client ID by default,
