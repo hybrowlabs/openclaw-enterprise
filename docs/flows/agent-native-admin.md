@@ -122,8 +122,9 @@ revalidates exact Agent `administer`, selects the current active revision, and
 validates native configuration support before proxying. Attributable IAM denials
 during proxy admission trigger one audit append attempt for the human session and
 exact Agent. The admission owner consumes late denials even after the five-second
-response deadline, client disconnect or shutdown wait. Timely HTTP denials retain
-`403`; a failed append or admission timeout returns `503`.
+admission wait, client disconnect or shutdown wait. A timely HTTP denial waits for
+its audit append before returning `403`, so a stalled append can delay the HTTP
+response. A failed append or admission timeout returns `503`.
 
 Admission reads Better Auth once and returns the verified session metadata with
 the caller identity. The status and proxy paths reuse that result to check
