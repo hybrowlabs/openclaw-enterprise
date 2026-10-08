@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-10-06
-last_updated_session: agent:roboclaw:dashboard:9d0532e1-befb-4fc3-935e-7cd2a0c72110
+updated: 2026-10-08
+last_updated_session: authoring-run/02228d02-e16c-4a55-9a43-16b9efb35ebe
 ---
 
 # Harness Execution Topology Flow
@@ -100,7 +100,7 @@ validation. See the [SSH flow](pr-24-ssh-compute.md).
 Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
 source. It projects the OCC Secret key only into embedded OpenClaw or a dedicated
 Harness. Canonical sources live in the tenant storage target; Compute delivers selected fields into an
-exact revision-owned Harness Secret, including the account token/workspace for ChatGPT.
+exact revision-owned Harness Secret, including the account token for ChatGPT.
 Dedicated gateways receive neither model source. This namespace-local delivery
 also applies to fixture images without native runtime configuration; only the
 native dedicated transport token depends on that configuration.
@@ -128,17 +128,15 @@ owns qualified DNS and exact NetworkPolicy/Service selectors. Harness selectors
 include revision and network profile; Gateway selectors omit revision for stability.
 `runtime.gatewayNodeSelector`
 independently places the Gateway Pod and private-state initializer on trusted nodes.
-After the Harness is otherwise ready, preparation starts its candidate Gateway
-as the bootstrap endpoint; the predecessor is stopped (step 3) or unready.
-Activation waits for the exact workspace node to enroll. Dedicated Codex uses
-the stable name `agent-<agent digest>-workspace` across revisions.
+After Harness readiness, preparation starts a candidate Gateway if its predecessor is stopped or unready. Activation waits for workspace node enrollment. Dedicated Codex keeps `agent-<agent digest>-workspace` across revisions.
+`KubernetesComputeDriver.gatewayNativeHookRelayConfiguration` binds its callbacks to the Agent route; `AGENT_WITH_NODE_ENTRYPOINT` prepares private capability storage and TLS trust, and OpenClaw authorizes callbacks. See [native hook routing](../reference/gateway-routing.md#native-node-endpoint).
 
 Dedicated Gateway and Harness ServiceAccounts remain separate. Compute owns the
 Gateway Pod; the SandboxDriver owns the native Harness. OpenClaw enrolls from a
 private one-use target, then reuses its persisted device token. Only the Harness
 receives the model key. Compute pins it in a `dedicated-native` profile with
 `inference: "worker"`: disconnection fails turns without Gateway inference.
-Exact callbacks and session-bound admission scope transport to the Agent.
+Callbacks and session-bound admission scope transport to the Agent.
 Embedded OpenClaw combines the workload, Agent identity, and model key.
 The worker's scoped Secret and workload-writing permissions support delivery and
 enrollment; Gateways receive no controller or Harness Kubernetes credentials.
@@ -316,10 +314,12 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 
 ## Changelog
 
+- 2026-10-08 04:40: Reconciled dedicated endpoint flow with current native callback routing. (authoring-run/02228d02-e16c-4a55-9a43-16b9efb35ebe - 31b1b6a9ab59f219d0fbe3d44b1550f8c8f2fe4a)
+
+- 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 - 2026-10-06 11:17: Reconciled endpoint flow with current namespace and provider provisioning; condensed repeated prose. (agent:roboclaw:dashboard:9d0532e1-befb-4fc3-935e-7cd2a0c72110 - b6dc6b87a461ad33374e133d15cc739d8e074fea)
-
+- 2026-10-05 14:24: Route dedicated Codex native hook callbacks with per-relay capabilities. (authoring-run/05067642-df93-4716-8f90-5b7430e50c41 - dfa091b6)
 - 2026-10-05 11:36: Normalize runtime endpoints with the shared Driver validator; trim repeated topology narration. (agent:roboclaw:dashboard:9d0532e1-befb-4fc3-935e-7cd2a0c72110 - 9958ef0412565864efba7b13995536d7c2a51d22)
-
 - 2026-10-05 00:06: Add custom Codex Responses endpoint selection and explicit native-provider rendering while preserving admitted model IDs and Harness-only credentials. (authoring-run/4e4824a1-f107-44c2-90bf-00fe13ff650c - d269c6d03)
 
 - 2026-10-03 16:02: Run configured development API and worker Compute preflight before admitting work. (01a0fe72-58b2-7cc3-b770-7310f5401deb - c04093189f2ba6240f8dc431847c2f487afd11de)
