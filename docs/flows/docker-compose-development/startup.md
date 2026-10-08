@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-07
-last_updated_session: authoring-run/aaa97aa0-d766-4366-af99-089d183c088a
+updated: 2026-10-08
+last_updated_session: authoring-run/de31a6a4-b02f-464c-8652-662a7b152fe2
 ---
 
 # Compose development startup
@@ -110,13 +110,10 @@ migration through Compose, not directly.
 
 `compose.yaml:services.bootstrap`, `scripts/bootstrap-installation.mjs`
 
-After migration exits `0`, Compose runs the shared initializer with development
-inputs. Fresh bootstrap creates the human and non-Agent service
-administrators, singleton Installation, native IAM seed, audit evidence, and
-initial service-key response. It also creates the `default` Namespace in `provisioning` state; worker reconciliation later
-provisions its backing Docker boundary. Existing Installations retain their
-Namespaces, accounts, keys, IAM policy, configuration, and revision history; a
-missing, expired, or revoked key never triggers reissue.
+After migration exits `0`, bootstrap creates administrators, Installation, native
+IAM, audit evidence, service key, and a `provisioning` default Namespace. The
+worker provisions its Docker boundary. Existing Installation state is preserved;
+missing, expired, or revoked keys never trigger reissue.
 
 Only the initializer mounts `occ_bootstrap_data`; the API and worker load
 committed state after initializer success. The
@@ -147,14 +144,11 @@ operator-owned directory; otherwise the helper creates a private temporary
 directory. It never overwrites an existing file, prints `data.key`, or reruns
 bootstrap to replace a missing key.
 
-`dev-up` then reads the Installation with `./bin/occ installation get` and the
-copied key. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
-maps the `x-api-key` to the Installation-scoped service administrator. The
-startup proof succeeds only when the returned resource ID matches the copied
-key response's `meta.installationId`. The
-[service-key flow](../service-api-keys.md#3-verify-the-credential-and-enforce-its-fixed-identity-scope)
-owns admission and `401` rejection without cookie fallback; current IAM policy
-still authorizes each resource operation.
+`./bin/occ installation get` uses the copied key; its result must match
+`meta.installationId`. `apps/controller/src/auth/index.ts:ControllerAdmissionVerifier.verify`
+resolves the Installation-scoped service administrator, and IAM authorizes each
+operation. The [service-key flow](../service-api-keys.md#3-verify-the-credential-and-enforce-its-fixed-identity-scope)
+owns admission and `401` rejection without cookie fallback.
 
 When `OCC_CONFIG_PATH` is absent, PostgreSQL-backed development selects the
 filesystem Configuration Driver from `OCC_DEVELOPMENT_CONFIGURATION_ROOT`.
@@ -387,6 +381,8 @@ both Helm passes, recovery and destructive realm teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-08 09:30: Trimmed repeated startup detail after integration. (authoring-run/de31a6a4-b02f-464c-8652-662a7b152fe2 - 9506de602a55f57bf19fa02ba0c7b844aa5a6649)
 
 - 2026-10-07 23:31: Documented optional Keycloak startup, identity attachment and cleanup. (authoring-run/aaa97aa0-d766-4366-af99-089d183c088a - c14b315969527a4e1f3fc3bd525e54d2ed5ec030)
 

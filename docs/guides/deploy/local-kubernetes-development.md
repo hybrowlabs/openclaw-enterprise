@@ -169,14 +169,11 @@ Use `docker` for Docker Engine. Kubernetes-only startup needs no Compose and
 rejects Compose arguments. Keep profile exports for cleanup; without them,
 startup defaults to Compose with Docker Compute.
 
-State, the kubeconfig, and credentials, including the initial administrator
-service key, are written to a private
-[state directory](../../reference/settings/development.md#required-development-controller-environment)
-that startup prints. By default it is `openclaw-development` in the temporary
-directory, which on macOS is a per-user `/private/var/folders/<id>/T` path.
-Set the absolute `OCC_DEVELOPMENT_STATE_DIRECTORY` before both startup and
-cleanup to use another location. Its parent must not contain symlinks; on macOS,
-use `/private/tmp/...` instead of `/tmp/...`.
+Startup prints the private [state directory](../../reference/settings/development.md#required-development-controller-environment)
+containing kubeconfig and credentials. Its default is `openclaw-development`
+under the temporary directory (macOS: `/private/var/folders/<id>/T`). To override,
+set absolute `OCC_DEVELOPMENT_STATE_DIRECTORY` for startup and cleanup; parent
+paths cannot contain symlinks (macOS: use `/private/tmp/...`, not `/tmp/...`).
 `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` bounds k3d
 readiness and each later startup wait. A cluster timeout triggers owned-resource
 rollback; follow the printed cleanup instruction if state is retained. Startup
