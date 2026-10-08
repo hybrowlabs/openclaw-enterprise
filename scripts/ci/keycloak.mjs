@@ -7,7 +7,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-// Keycloak for the keycloak-oidc lane (RFC-0059): a digest-pinned `start-dev` server that
+// Keycloak for the keycloak-oidc lane (RFC-0019): a digest-pinned `start-dev` server that
 // imports tests/fixtures/keycloak/realm-oce.json and serves HTTPS on 127.0.0.1:443 as
 // keycloak.oce.localhost, so its issuer satisfies OCE's endpoint rule unchanged.
 
