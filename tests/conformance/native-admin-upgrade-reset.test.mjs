@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import https from "node:https";
 import { EventEmitter } from "node:events";
+import { IncomingMessage } from "node:http";
 import test from "node:test";
 import { deriveNativeAdminHost } from "../../apps/controller/src/gateway/native-admin.ts";
 import { createNativeAdminAccess } from "../../apps/controller/src/http/native-admin.ts";
@@ -617,6 +618,58 @@ test("native-admin denial ownership preserves a timely HTTP denial response", as
   assert.equal(owner.denials().length, 1);
   assert.equal(owner.upstreams.length, 0);
   await owner.shutdown();
+});
+
+test("native-admin denial ownership permits a completed HTTP request on a live connection", async (t) => {
+  const transport = pendingValue();
+  let transportEntered = false;
+  const owner = denialOwner(t, {
+    authorize: (selection) => Promise.resolve(selection),
+    transport() {
+      transportEntered = true;
+      return transport.promise;
+    },
+  });
+  // IncomingMessage may finish and auto-destroy while its connection remains live.
+  // Admission must check the connection rather than treating that EOF as disconnect.
+  const raw = new IncomingMessage(new AdmissionSocket());
+  const request = owner.request();
+  raw.method = request.method;
+  raw.url = request.url;
+  raw.headers = request.headers;
+  raw.complete = true;
+  raw.push(null);
+  raw.resume();
+  await settleCallbacks();
+  assert.equal(raw.destroyed, true);
+  assert.equal(raw.socket.destroyed, false);
+  const reply = {
+    request: { id: "request_test" },
+    header() {
+      return this;
+    },
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    send(body) {
+      this.body = body;
+    },
+  };
+  const handling = owner.access.interceptHttp({ headers: raw.headers, url: "/", raw }, reply);
+  try {
+    await settleCallbacks();
+    assert.equal(transportEntered, true);
+    // End before proxying; this case proves admission ordering without a real upstream.
+    transport.resolve("");
+    await handling;
+    assert.equal(reply.statusCode, 503);
+    assert.equal(owner.upstreams.length, 0);
+  } finally {
+    transport.resolve("");
+    await handling;
+    await owner.shutdown();
+  }
 });
 
 test("a client reset during a pending native-admin denial still records the denial", async () => {

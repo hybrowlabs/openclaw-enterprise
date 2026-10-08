@@ -876,12 +876,12 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
       );
       return true;
     }
-    if (nativeAdminShuttingDown || request.raw.destroyed) {
+    if (nativeAdminShuttingDown || request.raw.socket.destroyed) {
       canonicalFailure(reply, dependencyUnavailable());
       return true;
     }
     const context = await boundedNativeAdminAdmission(nativeAdminProxyTransportContext(admission));
-    if (context === undefined || nativeAdminShuttingDown || request.raw.destroyed) {
+    if (context === undefined || nativeAdminShuttingDown || request.raw.socket.destroyed) {
       canonicalFailure(reply, dependencyUnavailable());
       return true;
     }
