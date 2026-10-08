@@ -7,8 +7,9 @@ import { createRequire } from "node:module";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import test from "node:test";
+import test, { before } from "node:test";
 import { promisify } from "node:util";
+import { devUpUnrelatedImage, prepareDevUpImage } from "../../scripts/ci/prepare.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
 
 const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
@@ -19,6 +20,18 @@ const execute = promisify(execFile);
 const repository = resolve(import.meta.dirname, "../..");
 const occ = join(repository, "bin", "occ");
 const selected = process.env.OCC_TEST_DEV_UP_K3D_REAL === "1";
+
+// Both the lane and direct opt-in execution need this image on a cold engine.
+// Keep the 15-minute pull retry bound, three 30-second inspections and process
+// termination margin outside the rejection case's 60-second assertion budget.
+before(
+  async () => {
+    if (selected) {
+      await prepareDevUpImage();
+    }
+  },
+  { timeout: 1_080_000 },
+);
 
 test(
   "dev-up refuses mismatched image selections before creating a cluster",
@@ -69,10 +82,9 @@ test(
       /must use immutable sha256 digest references/,
     );
 
-    // The pinned public k3s image is already required by this suite. Its real
-    // engine metadata cannot claim to be the OCE checkout's release.
-    const unrelated =
-      "rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657";
+    // Preparation verified this exact image exists; its real engine metadata
+    // cannot claim to be the OCE checkout's release.
+    const unrelated = devUpUnrelatedImage;
     await reject(
       { OCC_DEVELOPMENT_CONTROLLER_IMAGE: unrelated, OCC_KUBERNETES_RUNTIME_IMAGE: unrelated },
       /selected image revision does not match checkout/,

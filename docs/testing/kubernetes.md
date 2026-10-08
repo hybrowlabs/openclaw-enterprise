@@ -16,6 +16,10 @@ pnpm cli:build
 OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs
 ```
 
+Both routes prepare the pinned rejection image with verified digests on
+`OCC_TEST_DEV_UP_CONTAINER_ENGINE` (default `docker`). Preparation has an 18-minute
+deadline outside the 60-second assertion budget; registry images remain cached.
+
 The Kubernetes-only case checks authenticated readiness, presets, plugin discovery,
 and a dedicated Codex Agent’s sandbox using a synthetic credential. The Compose
 case checks the launcher’s generated image and seccomp profile in a real Pod. Both
