@@ -1997,14 +1997,14 @@ const timeout = setTimeout(() => {
 test(
   "runtime image shares Codex 0.160.0 between the plugin and Dedicated command",
   imageTestOptions,
-  async () => {
+  async (t) => {
     const script = String.raw`
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { createRequire } = require("node:module");
 const { dirname, relative, resolve } = require("node:path");
-const { realpathSync, readFileSync } = require("node:fs");
-const { execFileSync } = require("node:child_process");
+const { realpathSync, readFileSync, statSync } = require("node:fs");
+const { execFileSync, spawnSync } = require("node:child_process");
 const plugin = createRequire("/app/dist/extensions/codex/package.json");
 const installed = plugin.resolve("@openai/codex/package.json");
 assert.equal(JSON.parse(readFileSync(installed, "utf8")).version, "0.160.0");
@@ -2077,10 +2077,54 @@ const platformInventoryEntry = inventory.find((entry) => entry.path === platform
 assert.ok(platformInventoryEntry, "The final runtime inventory must include the stock Codex platform binary.");
 assert.equal((platformInventoryEntry.mode & 0o111) !== 0, true, "Codex platform binary must stay executable.");
 assert.equal(platformInventoryEntry.sha256, platformBinarySha256);
-// Codex runs its bundled bubblewrap. A bwrap on PATH would make Codex probe
-// --unshare-user --unshare-net at start, which the reviewed seccomp profile
-// denies, and log a false user-namespace error.
-assert.throws(() => execFileSync("sh", ["-c", "command -v bwrap"], {stdio: "pipe"}));
+// Exercise the distribution prerequisite through the image's normal PATH.
+// These metadata/help commands do not create a namespace or run a sandbox.
+const commandOptions = { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024 };
+const bwrap = execFileSync("sh", ["-c", "command -v bwrap"], commandOptions).trim();
+assert.equal(realpathSync(bwrap), "/usr/bin/bwrap");
+const bwrapStat = statSync(bwrap);
+assert.equal(bwrapStat.uid, 0, "The distribution owns the bwrap executable.");
+assert.equal(bwrapStat.mode & 0o6000, 0, "bwrap must not have setuid or setgid bits.");
+assert.notEqual(bwrapStat.mode & 0o111, 0, "bwrap must be executable.");
+assert.equal(
+  execFileSync("dpkg-query", ["--search", "/usr/bin/bwrap"], commandOptions).trim(),
+  "bubblewrap: /usr/bin/bwrap",
+);
+const packageStatus = execFileSync("dpkg-query", ["--status", "bubblewrap"], commandOptions);
+assert.match(packageStatus, /^Status: install ok installed$/m);
+const packageVersion = packageStatus.match(/^Version: (.+)$/m)?.[1];
+assert.ok(packageVersion, "The installed package must report its version.");
+const capabilities = execFileSync("python3", ["-I", "-S", "-c", [
+  "import errno, os",
+  "try:",
+  "    os.getxattr('/usr/bin/bwrap', 'security.capability')",
+  "except OSError as error:",
+  "    if error.errno != errno.ENODATA: raise",
+  "    print('absent')",
+  "else:",
+  "    raise SystemExit('unexpected bwrap file capabilities')",
+].join("\n")], commandOptions).trim();
+assert.equal(capabilities, "absent");
+const binaryVersion = execFileSync(bwrap, ["--version"], commandOptions).trim();
+assert.match(binaryVersion, /^bubblewrap [0-9]+\.[0-9]+/);
+const helpResult = spawnSync(bwrap, ["--help"], commandOptions);
+assert.equal(helpResult.error, undefined);
+assert.equal(helpResult.signal, null);
+assert.equal(helpResult.status, 0, helpResult.stderr);
+const help = helpResult.stdout + helpResult.stderr;
+// The pinned Codex launcher requires these flags; its compatibility path
+// handles older distro binaries without --argv0 or --ro-bind-fd.
+for (const flag of ["--as-pid-1", "--perms"]) assert.ok(help.includes(flag), "Missing " + flag);
+process.stdout.write("bwrap-prerequisite " + JSON.stringify({
+  path: realpathSync(bwrap),
+  packageVersion,
+  binaryVersion,
+  sha256: createHash("sha256").update(readFileSync(bwrap)).digest("hex"),
+  mode: bwrapStat.mode & 0o7777,
+  fileCapabilities: capabilities,
+  supportsArgv0: help.includes("--argv0"),
+  supportsRoBindFd: help.includes("--ro-bind-fd"),
+}) + "\n");
 process.stdout.write("shared-codex-0.160.0-ready\n");
 `;
     const { stdout } = await runDocker([
@@ -2095,5 +2139,8 @@ process.stdout.write("shared-codex-0.160.0-ready\n");
       script,
     ]);
     assert.match(stdout, /shared-codex-0.160.0-ready/);
+    const prerequisite = stdout.split("\n").find((line) => line.startsWith("bwrap-prerequisite "));
+    assert.ok(prerequisite, "The image must report its executable prerequisite.");
+    t.diagnostic(prerequisite);
   },
 );

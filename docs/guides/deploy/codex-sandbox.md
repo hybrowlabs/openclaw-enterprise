@@ -27,6 +27,18 @@ separately prepares and verifies a profile inside its own k3d node.
 
 ## Identify the restriction
 
+Use the runtime image's distribution-provided `bubblewrap` package. Codex
+`0.160.0` prefers a compatible `bwrap` on its normal `PATH`; the executable must
+support `--as-pid-1` and `--perms`. The runtime image check verifies the installed
+package, executable and help flags without running a sandbox. Custom images need
+the same prerequisite; see the [Codex sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites).
+
+Package availability does not establish host permission. On hosts that restrict
+unprivileged user namespaces, have the node administrator verify that the
+distribution's `bwrap` AppArmor profile is loaded and applicable to the workload.
+A profile file on disk is not loaded-policy evidence. Installing the package
+does not authorize changing host policy or disabling user-namespace restrictions.
+
 The message `bwrap: No permissions to create a new namespace` does not identify
 which layer denied the request. Record the node OS, kernel, container runtime,
 architecture, runtime image digest, Codex version, effective OCI seccomp policy,
