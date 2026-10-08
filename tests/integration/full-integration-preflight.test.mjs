@@ -392,6 +392,27 @@ test("manual dev-up workflow prepares the complete lane and aggregates its exact
   const action = loadYaml(await read(".github/actions/run-ci-lane/action.yml"));
   const suites = JSON.parse(await read("scripts/ci/test-suites.json"));
   assert.ok(workflow.on.workflow_dispatch.inputs.lane.options.includes("dev-up-k3d"));
+  const group = workflow.concurrency.group.startsWith("${{")
+    ? workflow.concurrency.group.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    : JSON.stringify(workflow.concurrency.group);
+  assert.equal(workflow.concurrency["cancel-in-progress"], false);
+  // Protected lanes keep their existing queue; launcher runs serialize by branch,
+  // even when a later dispatch selects a different commit on that branch.
+  for (const lane of workflow.on.workflow_dispatch.inputs.lane.options) {
+    for (const ref of ["refs/heads/main", "refs/heads/reviewed-keycloak"]) {
+      for (const sha of ["first-commit", "later-commit"]) {
+        assert.equal(
+          runInNewContext(group, {
+            inputs: { lane },
+            github: { ref, sha },
+            format: (template, value) => template.replace("{0}", value),
+          }),
+          lane === "dev-up-k3d" ? `full-integration-dev-up-k3d-${ref}` : "full-integration",
+          `${lane}: ${ref} at ${sha}`,
+        );
+      }
+    }
+  }
   const job = workflow.jobs["dev-up-k3d"];
   assert.equal(job.environment, undefined);
   assert.equal(job.env, undefined);

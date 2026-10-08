@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
 updated: 2026-10-08
-last_updated_session: authoring-run/e5c12029-7b1c-4214-a4b9-bde04d03ab41
+last_updated_session: authoring-run/09563984-5be9-4e9d-bf17-142ceb70d96d
 ---
 
 # GitHub Actions testing flow
@@ -78,14 +78,14 @@ established source property.
 Full Integration checks out the immutable event SHA. All lanes admit `main`.
 `k3d-model` and `openshell` also admit branches approved by exact protected-environment
 rules, with required reviewers and self-review prevention; administrators remove
-the temporary rule after verification. Explicit `dev-up-k3d` accepts branches
-without protected credentials and stays outside `all` and PR gates. It prepares
+the temporary rule after verification. `dev-up-k3d` admits branches
+without protected credentials, outside `all` and PR gates. It prepares
 Go, the same-source CLI, Chromium and k3d on a disposable Ubuntu 22.04 VM;
-the file deadline is 150 minutes and the job limit 180 minutes. Other non-main
-lanes and tags are rejected. Dispatch is manual, and runs share one concurrency
-group without cancellation. The provider environment permits only `main` without
-per-run review; other credentialed environments require reviewer approval.
-Targeted results prove only their selected lane.
+file and job deadlines are 150 and 180 minutes. Other non-main
+lanes and tags are rejected. Manual dispatches serialize without cancellation:
+`dev-up-k3d` per branch, others in `full-integration`. The provider environment
+permits only `main` without per-run review; other credentialed environments require reviewer approval.
+Results prove only the selected lane.
 
 PostgreSQL migration and application suites own separate servers; each of three Kubernetes fixture files owns a separate cluster and PostgreSQL server. Before creating k3d nodes that share the runner kernel, the shared action enables bridge netfilter; missing filtering fails setup rather than leaving Pod network policies unenforced. The repository credential platform lane uses Blacksmith for full-image HTTP, PostgreSQL, Unix-control and credential-material proof; NetworkPolicy enforcement remains the fixture lanes' responsibility. State and cleanup stay on each runner; within a lane, `scripts/ci/run-tests.mjs:runLane` runs files sequentially except audited `parallelFiles`.
 
@@ -203,6 +203,8 @@ Per-file cleanup releases its disposable database; job cleanup removes only stat
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-08 11:04: Isolate launcher queue. (authoring-run/09563984-5be9-4e9d-bf17-142ceb70d96d - 9e7a30a5da374826b1a2ba79b3bca9cdcb74d1f2)
 
 - 2026-10-08 09:57: Documented Keycloak egress repair and manual qualification. (authoring-run/e5c12029-7b1c-4214-a4b9-bde04d03ab41 - 12719f1d366291b774eb9d4948be451c9dd7d805)
 
