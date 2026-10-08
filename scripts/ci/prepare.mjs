@@ -1555,7 +1555,8 @@ async function ensureDockerSourceImage(
   docker = process.env.OCC_DOCKER_BIN ?? "docker",
 ) {
   if (stateOwnsImageTag(state, image)) {
-    await boundedImageCommand(["image", "inspect", image], "The container engine", [image], docker);
+    const args = ["image", "inspect", image];
+    await boundedImageCommand(args, "The container engine", args, docker);
     return dockerImageId(image, docker);
   }
   assertImmutableImageReference(image, envName);
