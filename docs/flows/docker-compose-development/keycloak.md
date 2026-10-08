@@ -1,7 +1,7 @@
 ---
 created: 2026-10-07
-updated: 2026-10-07
-last_updated_session: authoring-run/aaa97aa0-d766-4366-af99-089d183c088a
+updated: 2026-10-08
+last_updated_session: authoring-run/e5c12029-7b1c-4214-a4b9-bde04d03ab41
 ---
 
 # Local Keycloak startup and teardown
@@ -73,7 +73,13 @@ is not continuous drift detection; ordinary `up` rejects existing state/clusters
 
 After OCE readiness, the launcher signs in through the verified Console HTTPS
 endpoint with the bootstrap password and reads the administrator's ID. It
-replaces `helm-values.json` with complete second-pass values, applies the OIDC
+reads the dedicated Envoy Service through the owned kubeconfig and context.
+The Service identity, Gateway ownership labels and selectors, TLS ports and
+ClusterIP addresses must validate before any second-pass change. Startup sets
+`auth.oidc.egressCidrs` to those exact IPv4 `/32` hosts, retaining the
+selector-scoped post-DNAT 10443 rule; an absent or invalid Service fails closed. The existing chart accepts IPv4
+CIDRs only, so an IPv6 Service is rejected before the second pass.
+It replaces `helm-values.json` with complete second-pass values, applies the OIDC
 client Secret, and runs Helm again. That pass enables OIDC and recovery-only
 passwords and disables native Agent browser administration for host-only cookies.
 Once the API advertises OIDC, the launcher obtains a fresh recovery session and
@@ -99,7 +105,9 @@ Certificate renewal is not propagated to the copied Secret by this launcher.
 
 Run the [real launcher cases](../../testing/keycloak.md#local-launcher-coverage)
 only with their owned disposable fixture. They cover browser login, recovery,
-realm persistence, second-pass failure and cleanup; automated certificate pins
+realm persistence, second-pass failure and cleanup. After the OIDC upgrade, API
+probes must reach Keycloak and reject unrelated HTTPS between successful
+listener controls; automated certificate pins
 do not verify a human browser's CA import. The realm-hash warning runs only at
 installation. A retained-state error names the directory needed by `occ dev down`;
 repair access to its recorded engine and cluster before retrying cleanup.
@@ -115,5 +123,7 @@ repair access to its recorded engine and cluster before retrying cleanup.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-08 09:57: Documented Keycloak egress repair and manual qualification. (authoring-run/e5c12029-7b1c-4214-a4b9-bde04d03ab41 - 12719f1d366291b774eb9d4948be451c9dd7d805)
 
 - 2026-10-07 23:35: Traced optional Keycloak startup and cleanup. (authoring-run/aaa97aa0-d766-4366-af99-089d183c088a - c14b315969527a4e1f3fc3bd525e54d2ed5ec030)

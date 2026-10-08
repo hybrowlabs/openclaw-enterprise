@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -672,12 +673,65 @@ func developmentKeycloakSubject(realm []byte, username string) (string, error) {
 	return "", fmt.Errorf("%s has no user %s with a fixed ID", developmentKeycloakRealmFile, username)
 }
 
+// developmentKeycloakEgressCIDRs accepts only the dedicated Gateway's Service.
+// These pre-DNAT hosts complement the selector-scoped post-DNAT 10443 policy.
+func developmentKeycloakEgressCIDRs(data []byte) ([]string, error) {
+	var service struct {
+		Metadata struct {
+			Name      string            `json:"name"`
+			Namespace string            `json:"namespace"`
+			Labels    map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Spec struct {
+			Type       string            `json:"type"`
+			ClusterIP  string            `json:"clusterIP"`
+			ClusterIPs []string          `json:"clusterIPs"`
+			Selector   map[string]string `json:"selector"`
+			Ports      []struct {
+				Protocol   string `json:"protocol"`
+				Port       int    `json:"port"`
+				TargetPort int    `json:"targetPort"`
+				NodePort   int    `json:"nodePort"`
+			} `json:"ports"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(data, &service); err != nil {
+		return nil, fmt.Errorf("read Keycloak Envoy Service: %w", err)
+	}
+	if service.Metadata.Name != developmentKeycloakEnvoyService || service.Metadata.Namespace != "envoy-gateway-system" || service.Spec.Type != "NodePort" {
+		return nil, fmt.Errorf("Keycloak Envoy Service identity does not match the owned publication")
+	}
+	for key, want := range map[string]string{
+		"gateway.envoyproxy.io/owning-gateway-name":      developmentKeycloakGateway,
+		"gateway.envoyproxy.io/owning-gateway-namespace": developmentKeycloakNamespace,
+	} {
+		if service.Metadata.Labels[key] != want || service.Spec.Selector[key] != want {
+			return nil, fmt.Errorf("Keycloak Envoy Service is not owned by the dedicated Gateway")
+		}
+	}
+	if len(service.Spec.Ports) != 1 || service.Spec.Ports[0].Protocol != "TCP" || service.Spec.Ports[0].Port != 443 || service.Spec.Ports[0].TargetPort != developmentKeycloakEnvoyTargetPort || service.Spec.Ports[0].NodePort != developmentKeycloakNodePort {
+		return nil, fmt.Errorf("Keycloak Envoy Service does not expose the expected TLS listener")
+	}
+	if len(service.Spec.ClusterIPs) == 0 || service.Spec.ClusterIP != service.Spec.ClusterIPs[0] {
+		return nil, fmt.Errorf("Keycloak Envoy Service has no consistent ClusterIP addresses")
+	}
+	cidrs := make([]string, 0, len(service.Spec.ClusterIPs))
+	for _, value := range service.Spec.ClusterIPs {
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.IsGlobalUnicast() || !address.Is4() || address.Zone() != "" {
+			return nil, fmt.Errorf("Keycloak Envoy Service requires a unicast IPv4 ClusterIP supported by auth.oidc.egressCidrs")
+		}
+		cidrs = append(cidrs, netip.PrefixFrom(address, address.BitLen()).String())
+	}
+	return cidrs, nil
+}
+
 // developmentKeycloakSignInValues derives the second Helm pass from the first:
 // OIDC sign-in against the development Keycloak, the bootstrap administrator as
 // the recovery account, and passwords for that account only. OIDC supports
 // host-only cookies only, so the chart requires native Agent administration,
 // and its shared cookie domain, to be off. Every key is an existing chart value.
-func developmentKeycloakSignInValues(first []byte, cluster, recoveryUserID string) ([]byte, error) {
+func developmentKeycloakSignInValues(first []byte, cluster, recoveryUserID string, service []byte) ([]byte, error) {
 	if !developmentRecoveryUserID.MatchString(recoveryUserID) {
 		return nil, fmt.Errorf("the development administrator's user ID is not a valid auth.recoveryUserId")
 	}
@@ -688,6 +742,10 @@ func developmentKeycloakSignInValues(first []byte, cluster, recoveryUserID strin
 	auth, _ := values["auth"].(map[string]any)
 	if baseURL, _ := auth["baseUrl"].(string); !strings.HasPrefix(baseURL, "https://") {
 		return nil, fmt.Errorf("Keycloak sign-in needs the first Helm pass's HTTPS auth.baseUrl")
+	}
+	cidrs, err := developmentKeycloakEgressCIDRs(service)
+	if err != nil {
+		return nil, err
 	}
 	issuer := developmentKeycloakIssuer(cluster)
 	endpoints := issuer + "/protocol/openid-connect/"
@@ -703,6 +761,7 @@ func developmentKeycloakSignInValues(first []byte, cluster, recoveryUserID strin
 		"clientIdKey":      "client-id",
 		"clientSecretKey":  "client-secret",
 		"displayName":      developmentKeycloakSignInName,
+		"egressCidrs":      cidrs,
 	}
 	values["agentNativeAdmin"] = map[string]any{"enabled": false}
 	return json.Marshal(values)
@@ -755,7 +814,11 @@ func (r *runner) signInDevelopmentKeycloak(ctx context.Context, state *developme
 	if err != nil {
 		return err
 	}
-	values, err := developmentKeycloakSignInValues(first, state.Cluster, userID)
+	service, err := r.output(ctx, "kubectl", "--kubeconfig", filepath.Join(state.directory, "kubeconfig"), "--context", "k3d-"+state.Cluster, "-n", "envoy-gateway-system", "get", "service", developmentKeycloakEnvoyService, "-o", "json")
+	if err != nil {
+		return fmt.Errorf("read owned Keycloak Envoy Service: %w", err)
+	}
+	values, err := developmentKeycloakSignInValues(first, state.Cluster, userID, service)
 	if err != nil {
 		return err
 	}

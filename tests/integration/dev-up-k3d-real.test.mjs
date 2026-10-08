@@ -714,7 +714,8 @@ test(
     timeout: 1_800_000,
   },
   async (t) => {
-    const { keycloakLauncher, publishedJSON } = await import("../helpers/dev-up-keycloak.mjs");
+    const { keycloakLauncher, publishedJSON, verifyKeycloakAPIEgress } =
+      await import("../helpers/dev-up-keycloak.mjs");
     const { createHash, X509Certificate } = await import("node:crypto");
     const { chromium } = await import("playwright");
     const fixture = await keycloakLauncher(t);
@@ -725,6 +726,8 @@ test(
     assert.equal(values.auth.oidc.enabled, true);
     assert.equal(values.auth.passwordSignIn, "recovery-only");
     assert.equal(values.agentNativeAdmin.enabled, false);
+    // Probe the actual API after the OIDC upgrade, when the additive policy is active.
+    await verifyKeycloakAPIEgress(fixture, state, values);
     const issuer = `https://${fixture.keycloakHost}/realms/oce`;
     const discovery = await publishedJSON(
       {
@@ -834,9 +837,24 @@ test(
             adminId,
             "Alice is attached to the existing administrator",
           );
-          // This guarded read also proves administrator authorization survived attachment.
-          assert.equal((await api(page, `/api/auth/accounts/${adminId}`)).status, 200);
+          // The guarded GET requires Origin, which page fetch omits for same-origin GETs.
+          // Observe the same browser session through verified HTTPS with its exact cookies.
           const cookies = await context.cookies(origin);
+          const account = await publishedJSON(
+            {
+              hostname: fixture.consoleHost,
+              port: fixture.browserPort,
+              ca: await fixture.read("browser-ca.crt"),
+            },
+            `/api/auth/accounts/${adminId}`,
+            {
+              headers: {
+                origin,
+                cookie: cookies.map(({ name, value }) => `${name}=${value}`).join("; "),
+              },
+            },
+          );
+          assert.equal(account.data.userId, adminId);
           const sessionCookie = cookies.find(
             ({ name, value }) => name.endsWith(".session_token") && value,
           );

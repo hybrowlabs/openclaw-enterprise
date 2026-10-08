@@ -28,6 +28,9 @@ which require exclusive, bindable loopback port 443 and sandbox-capable Chromium
 
 See [two-cluster validation](two-cluster-local.md).
 
+For manual branch qualification on a disposable hosted VM, see
+[run the hosted local installation lane](README.md#run-the-hosted-local-installation-lane).
+
 ## Kubernetes HTTP fixture
 
 Requires Docker, k3d, `kubectl`, and the migrated `openclaw_k8s_local` database

@@ -52,7 +52,7 @@ sandbox, so it needs no cluster.
 
 Full Integration uses the immutable event commit. Lanes require `main` except
 `k3d-model` and `openshell`, which accept exact protected-environment branch
-rules. The main-only `provider-account` lane needs no per-run approval; other
+rules, and explicit `dev-up-k3d`, which uses no protected credentials. The main-only `provider-account` lane needs no per-run approval; other
 credentialed environments require approval. `helper-timeout` and standalone
 `logging-collector` have no environment gate. Missing inputs fail, and a targeted
 run proves only its selected lane.
@@ -158,7 +158,9 @@ See [k3d image preparation](ci-k3d-images.md#select-immutable-images-for-local-p
 The [CI workflow](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, merge groups, and manual dispatch.
 [Full Integration](../../.github/workflows/full-integration.yml) runs only by
 manual dispatch, using the requested lane or `all`, not on pushes or merges. The
-`k3d-model` and `openshell` branch exceptions below do not enable other lanes outside `main`.
+`k3d-model` and `openshell` retain the protected branch exceptions below.
+The explicit credential-free `dev-up-k3d` lane also accepts reviewed branches; see
+[local installation qualification](README.md#run-the-hosted-local-installation-lane).
 `provider-account` remains manual because its configured admin credential cannot
 authenticate from the hosted runner.
 
@@ -179,7 +181,7 @@ gh workflow run full-integration.yml --ref '<approved-branch>' -f lane=openshell
 The reviewer inspects the commit before approval. Jobs check out immutable
 `github.sha`; moving the branch does not change the run. The dispatcher cannot
 self-approve. Remove the branch rule after proof completes.
-Other lanes, including `all` and `provider-account`, remain main-only. The
+Other credentialed lanes, `all`, and `provider-account` remain main-only. The
 `k3d-model` lane runs real Kubernetes topology tests, including embedded
 invalid-credential cutover and recovery. The `openshell` lane runs the
 first-Agent proof with both Compose and Kubernetes control planes. Each proof
