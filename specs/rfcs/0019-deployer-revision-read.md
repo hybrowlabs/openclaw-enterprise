@@ -8,7 +8,7 @@ author: freeqaz
 
 - **ID:** RFC-0019
 - **Created:** 2026-10-07
-- **Last updated:** 2026-10-07
+- **Last updated:** 2026-10-08
 - **RFC PR:** [#1606](https://github.com/openclaw/openclaw-enterprise/pull/1606)
 - **Implementation plan:** none; delivery is one pull request,
   [#1605](https://github.com/openclaw/openclaw-enterprise/pull/1605), listed under
@@ -26,7 +26,8 @@ author: freeqaz
 When a deploy admits a new AgentRevision, OCC grants the caller exact
 `agent_revision:read` on that revision. The grant is an ordinary AccessBinding,
 written in the admission transaction through the selected IAM Driver, listed in
-the deploy audit event, and removed with the revision. Nobody else gains
+the deploy audit event, and removed with the revision. A deny Restriction on
+that read still wins: deploy then writes no grant and says so. Nobody else gains
 anything: a person who can read or administer the Agent but did not deploy, such
 as a Console sharee, still needs their own revision grant. Deploy becomes the
 first operation that writes IAM policy for its caller.
@@ -59,14 +60,16 @@ deployment status.
 ## Goals
 
 - A caller who deploys can read the revision her deploy admitted, with no
-  administrator step.
+  administrator step, unless a deny Restriction on that read applies.
+  Restrictions keep overriding grants; deploy neither writes an ineffective
+  grant nor turns the read deny into a deploy denial.
 - The grant is exact, attributable, and visible as ordinary policy: one binding,
   one revision, one subject, in the deploy audit event.
 - It appears and disappears atomically with the revision.
 - A caller who cannot hold a Namespace binding still deploys, without a grant.
   Any other failure to write the grant fails the deploy closed, with the
-  revision rolled back, rather than admitting a revision its deployer cannot
-  read.
+  revision rolled back. A Restriction is policy, not a write failure: it is
+  detected before any write and reported, never written around.
 
 ## Non-goals
 
@@ -90,8 +93,15 @@ desired state, queues work and, through the API, appends the deploy audit event.
 1. If the selected IAM Driver keeps policy outside platform State
    (`namespacePolicyTransaction` is not `platform-unit-of-work`), stop. OCC never
    writes policy around an external IAM Driver.
-2. If the caller can already read the new revision (for example the bootstrap
-   administrator's Installation-wide Role), stop. No grant is written.
+2. Ask the IAM Driver for the caller's `read` decision on the new revision.
+   If it is allowed (for example the bootstrap administrator's
+   Installation-wide Role), stop. If it is denied and its evidence names an
+   applicable Restriction (`restrictionIds` is not empty), stop: a matching
+   Restriction denies even an exact binding
+   ([Restrictions](../../docs/reference/authorization.md#restrictions)), so a
+   grant could not make the revision readable. The deploy still returns `202`;
+   a Restriction denies only the action it names, and an administrator who
+   wants to stop deploys restricts `deploy`. No grant is written in either case.
 3. Ensure the Namespace Role `role_<namespaceId>_deployed_revision_read`, named
    "Deployed revision read", with exactly `agent_revision:read`. It is created on
    first use and then reused; Roles are immutable, and a Role with that ID but
@@ -109,14 +119,18 @@ with the same fields as `removedAccessBindings` (ID, subject, Role, target). The
 provisioning handoff checkpoint event does the same when provisioning deploys.
 When no grant was written, the list is omitted and
 `details.revisionReadGrantSkipped` says why: `external-iam-policy` (step 1),
-`already-readable` (step 2) or `subject-not-bindable` (step 5). An audit failure
-rolls back the grant with the revision.
+`already-readable` or `restricted` (step 2), or `subject-not-bindable` (step 5).
+With `restricted`, `details.revisionReadRestrictionIds` lists the Restrictions
+from the decision evidence. An audit failure rolls back the grant with the
+revision.
 
 **Lifecycle.** Revisions are deleted only when their Agent is deleted. The Agent
 deletion finalizer already removes bindings that target the Agent's revisions,
 and the accepted delete event lists them in `accessBindingsRemovedOnCompletion`.
 Namespace teardown removes all Namespace policy. An administrator can delete the
-binding at any time through the Namespace IAM API; the Agent is unaffected.
+binding at any time through the Namespace IAM API; the Agent is unaffected. A
+Restriction added after the grant overrides it, as it overrides any binding; the
+binding stays until it is deleted.
 
 **What still needs grants.** Sharees and other readers of the Agent, revisions
 deployed by someone else (including earlier ones), and anything beyond revision
@@ -131,17 +145,23 @@ sequenceDiagram
   participant Audit
   Member->>API: POST /agents/:id/deploy
   API->>API: authorize deploy, Configuration read, sources; create revision
-  alt Member cannot read the new revision
+  API->>IAM: decide read on the new revision
+  alt allowed
+    IAM-->>API: allowed: no grant (already-readable)
+  else denied by a Restriction
+    IAM-->>API: restrictionIds: no grant (restricted)
+  else denied, no Restriction
     API->>IAM: ensure Role, create exact binding
     IAM-->>API: binding (or subject refused: no grant)
   end
-  API->>Audit: deploy event with grantedAccessBindings
+  API->>Audit: deploy event with grantedAccessBindings or the skip reason
   API-->>Member: 202 revision (one transaction)
   Member->>API: GET /revisions/:new
-  API-->>Member: 200
+  API-->>Member: 200, or 403 when restricted or not bindable
 ```
 
-The diagram shows the proposed flow implemented in #1605.
+The diagram shows the proposed flow. #1605 implements it except the
+`restricted` branch, which it must add before it lands.
 
 ## Delivery and verification
 
@@ -163,6 +183,10 @@ Required outcomes and evidence (#1605):
 - An Installation-scoped ServicePrincipal deploys without a grant
   (`subject-not-bindable`) and leaves no Role behind; an IAM Driver that keeps
   policy outside platform State gets none (`external-iam-policy`).
+- With a matching deny Restriction on `agent_revision` `read` (Installation,
+  Namespace or exact-revision scope), a member's deploy returns `202`, writes
+  no Role or binding, its event says `restricted` with the Restriction ID, and
+  her revision GET stays `403`.
 
 Not yet verified: a live install. The provisioning path is covered by code
 review only, because provisioning requires Namespace-wide `create`, which only
@@ -184,6 +208,11 @@ administrators hold today.
   0.x. This proposal is its narrowest case, the deployer as the only audience,
   and does not block it: a profile could later grant the same binding to a wider
   audience.
+- **Fail admission when a Restriction blocks the read.** It keeps the promise
+  "every deployer reads her revision" literally, but a deny on revision `read`
+  would then deny `deploy`, an action the Restriction does not name.
+- **Write the grant despite a Restriction.** The binding would have no effect,
+  and the event would report a grant the caller cannot use.
 - **Always write the grant**, even when the caller already reads the revision.
   More uniform, but every administrator deploy would add a binding to the
   Namespace policy list with no effect.
