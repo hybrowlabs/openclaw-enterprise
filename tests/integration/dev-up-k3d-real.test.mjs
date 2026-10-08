@@ -424,7 +424,13 @@ test(
       const observation = await request(
         `/namespaces/${namespace.id}/agents/${provisioned.agentId}/deployments/${provisioned.revisionId}`,
       );
-      assert.notEqual(observation.data.status, "failed", "Agent deployment failed");
+      // The API error contains a fixed safe message and allowlisted runtime
+      // evidence. Retain it before cleanup removes the owned deployment.
+      assert.notEqual(
+        observation.data.status,
+        "failed",
+        `Agent deployment failed: ${JSON.stringify(observation.data.error)}`,
+      );
       assert.notEqual(observation.data.status, "cancelled", "Agent deployment was cancelled");
       if (observation.data.status === "succeeded") {
         deployment = observation.data;
