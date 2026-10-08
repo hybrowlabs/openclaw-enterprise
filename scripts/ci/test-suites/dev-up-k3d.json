@@ -2,7 +2,12 @@
   "env": {
     "OCC_TEST_DEV_UP_K3D_REAL": "1"
   },
-  "prepare": {},
+  "prepare": {
+    "defaultEnv": {
+      "OCC_TEST_BROWSER_EXECUTABLE": "",
+      "OCC_TEST_DEV_UP_CONTAINER_ENGINE": "docker"
+    }
+  },
   "files": [
     {
       "path": "tests/integration/dev-up-k3d-real.test.mjs",

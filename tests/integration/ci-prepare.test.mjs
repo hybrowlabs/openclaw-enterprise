@@ -2692,6 +2692,50 @@ test("prepareFile applies the images packaging Node base default without hiding 
   assert.match(invalid.stderr, /NODE_BASE_IMAGE must be an immutable/);
 });
 
+test("local launcher preparation preserves selected browser and engine inputs", async (t) => {
+  const root = await fixture(t);
+  for (const [name, inputs, expected] of [
+    [
+      "selected",
+      {
+        OCC_TEST_BROWSER_EXECUTABLE: "/prepared/chromium",
+        OCC_TEST_DEV_UP_CONTAINER_ENGINE: "podman",
+      },
+      {
+        OCC_TEST_BROWSER_EXECUTABLE: "/prepared/chromium",
+        OCC_TEST_DEV_UP_CONTAINER_ENGINE: "podman",
+      },
+    ],
+    [
+      "default",
+      { OCC_TEST_BROWSER_EXECUTABLE: "", OCC_TEST_DEV_UP_CONTAINER_ENGINE: "" },
+      { OCC_TEST_BROWSER_EXECUTABLE: "", OCC_TEST_DEV_UP_CONTAINER_ENGINE: "docker" },
+    ],
+  ]) {
+    // The runner removes inherited OCC_TEST_* selectors. Preparation must
+    // restore these explicit choices before the real launcher/browser starts.
+    const envPath = join(root, `${name}.env`);
+    const result = runPrepare(
+      [
+        "--lane",
+        "dev-up-k3d",
+        "--file",
+        "tests/integration/dev-up-k3d-real.test.mjs",
+        "--state",
+        join(root, `${name}.json`),
+        "--github-env",
+        envPath,
+      ],
+      inputs,
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const prepared = await readFile(envPath, "utf8");
+    for (const [key, value] of Object.entries(expected)) {
+      assert.ok(prepared.split("\n").includes(`${key}=${value}`), `${name}: ${key}`);
+    }
+  }
+});
+
 test("provider-account preparation accepts absent image inputs before prepared state exists", async (t) => {
   const root = await fixture(t);
   const adminKeyPath = join(root, "chatgpt-admin.key");
