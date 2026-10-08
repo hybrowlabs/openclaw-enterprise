@@ -1233,6 +1233,133 @@ test("credential source registration names the missing Credential Gateway", asyn
   );
 });
 
+test("Agent reads return the bound credentialSources; revision reads return only source IDs", async () => {
+  const fixture = await createInjectedFixture({
+    computeDriver: createReadyComputeDriver("compute-credential-sources", {
+      validateHarnessAuth() {},
+      async stopRevision() {},
+      // Compute owns runtime placement; the gateway sees the paired Sandbox's Namespace.
+      async resolveSandboxNamespace(namespace) {
+        return { ...namespace, name: `placed-${namespace.id.slice(-12)}` };
+      },
+    }),
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "credential-source-binding");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const gateway = {
+    id: "credential-gateway-api",
+    capability: "credential_gateway",
+    implementation: "test-recording-gateway",
+    async listSourceTypes() {
+      return [
+        {
+          type: "registry",
+          config: [{ name: "host", required: true }],
+          secrets: [],
+          rotation: "none",
+        },
+      ];
+    },
+    async registerSource() {
+      return { state: "ready" };
+    },
+    async updateSource() {
+      return { state: "ready" };
+    },
+    async rotateSource() {
+      return { state: "ready" };
+    },
+    async sourceStatus() {
+      return { state: "ready" };
+    },
+    async removeSource() {},
+    async attachForRevision(context) {
+      return context.sources.map((entry) => ({ sourceId: entry.id, ref: entry.id }));
+    },
+    async attachmentStatus(context) {
+      return context.sources.map((entry) => ({ sourceId: entry.id, state: "ready" }));
+    },
+    async withdraw() {
+      return { state: "revoked" };
+    },
+  };
+  const sandbox = {
+    id: "sandbox-api",
+    capability: "sandbox",
+    implementation: "test-sandbox",
+    facets: ["networking", "filesystem", "process"],
+    async cleanup() {},
+  };
+  for (const driver of [gateway, sandbox]) {
+    fixture.controller.registerDriver(driver);
+    fixture.controller.selectDriver(driver.capability, driver.id);
+  }
+  const source = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/credential-sources`,
+    {
+      body: { name: "registry", type: "registry", config: { host: "registry.example.com" } },
+    },
+  );
+  assert.equal(source.status, 201, JSON.stringify(source.body));
+  const configuration = await createConfiguration(controller, namespace.id, {
+    agents: {
+      defaults: {
+        model: "codex/gpt-5.6-sol",
+        models: { "codex/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+      },
+    },
+  });
+  const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "credential-source-agent",
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+      harnessAuth: { method: "runtime" },
+      credentialSources: [{ sourceId: source.data.id }],
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.deepEqual(created.data.credentialSources, [{ sourceId: source.data.id }]);
+  const agentPath = `/namespaces/${namespace.id}/agents/${created.data.id}`;
+  assert.deepEqual((await controller.request("GET", agentPath)).data.credentialSources, [
+    { sourceId: source.data.id },
+  ]);
+
+  const roleId = `credential-source-operate-${created.data.id}`;
+  fixture.state.roles.push({
+    id: roleId,
+    namespaceId: namespace.id,
+    permissions: [{ action: "operate", resourceKind: "credential_source" }],
+  });
+  fixture.state.bindings.push({
+    id: roleId,
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: created.data.servicePrincipalId,
+    roleId,
+    resourceKind: "credential_source",
+    resourceId: source.data.id,
+  });
+  fixture.state.identities.push({
+    kind: "service_principal",
+    id: created.data.servicePrincipalId,
+    namespaceId: namespace.id,
+    agentId: created.data.id,
+  });
+  const deployed = await controller.request("POST", `${agentPath}/deploy`);
+  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  // The gateway and type frozen at admission are private admission metadata.
+  assert.deepEqual(deployed.data.credentialSources, [{ sourceId: source.data.id }]);
+  const revision = await controller.request("GET", `${agentPath}/revisions/${deployed.data.id}`);
+  assert.equal(revision.status, 200, JSON.stringify(revision.body));
+  assert.deepEqual(revision.data.credentialSources, [{ sourceId: source.data.id }]);
+});
+
 test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
@@ -3581,6 +3708,11 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const nativeDeployment = await controller.request("POST", deploymentPath);
   assert.equal(nativeDeployment.status, 409);
   assert.equal(nativeDeployment.body.error.code, "RESOURCE_CONFLICT");
+  // A PAT source admits only an access-token credential, never an API key in its place.
+  assert.match(
+    nativeDeployment.body.error.message,
+    /requires an issued account access-token credential/,
+  );
 
   // OAuth references are representable, but no refresh or OAuth execution exists yet.
   const oauthCredential = {
@@ -3594,6 +3726,10 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const oauthDeployment = await controller.request("POST", deploymentPath);
   assert.equal(oauthDeployment.status, 409);
   assert.equal(oauthDeployment.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(
+    oauthDeployment.body.error.message,
+    /requires an issued account access-token credential/,
+  );
 
   const replacementCredential = {
     kind: "api_key",
@@ -3778,6 +3914,39 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     },
   );
   assert.equal(crossNamespaceAssociation.status, 404);
+  // A source naming another Namespace is refused as such, even when the route Namespace holds
+  // an account with that id: the reference itself must not cross Namespaces.
+  const foreignSourceAssociation = await controller.request(
+    "POST",
+    `/namespaces/${namespaceA.id}/agents`,
+    {
+      body: {
+        name: "foreign-source-agent",
+        configurationId: configurationA.id,
+        harnessAuth: {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: namespaceB.id, id: accountA.id },
+        },
+      },
+    },
+  );
+  assert.equal(foreignSourceAssociation.status, 404, JSON.stringify(foreignSourceAssociation.body));
+  // The API hides the reason; the controller names the Namespace boundary, not a later store check.
+  await assert.rejects(
+    controller.fixture.controller.createAgent(controller.fixture.principal.id, {
+      namespaceId: namespaceA.id,
+      name: "foreign-source-agent",
+      configurationId: configurationA.id,
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: namespaceB.id, id: accountA.id },
+      },
+    }),
+    {
+      name: "ScopeViolationError",
+      message: "Harness authentication sources cannot cross Namespaces.",
+    },
+  );
 
   // Namespace-wide Agent authority never substitutes for an exact ServiceAccount binding.
   controller.fixture.state.roles.push(
@@ -5195,6 +5364,47 @@ test("Agent provisioning API validates inline configuration with existing Secret
     [],
     "in-memory admission must stop before creating an Agent",
   );
+
+  // A managed ServiceAccount PAT source is admitted only for the exact account in the route
+  // Namespace that the caller may read. Every refusal comes before the durable-state step,
+  // which an accepted plan reaches (503 here).
+  const account = await fixture.platformState.transact((unit) =>
+    unit.serviceAccounts.createServiceAccount({
+      id: `sa_${randomUUID()}`,
+      namespaceId: namespace.data.id,
+      name: `provisioning-account-${randomUUID().slice(0, 8)}`,
+    }),
+  );
+  const managedSource = { kind: "service_account", namespaceId: namespace.data.id, id: account.id };
+  const provisionWithAccount = (source) =>
+    injectedRequest(fixture.app, "POST", `/namespaces/${namespace.data.id}/agents/provision`, {
+      body: provisioningRequestBody(namespace.data.id, secrets, {
+        harnessAuth: { method: "codex_pat", source },
+      }),
+    });
+  fixture.state.restrictions.push({
+    id: "deny-provisioning-account-read",
+    namespaceId: namespace.data.id,
+    resourceKind: "service_account",
+    resourceId: account.id,
+    action: "read",
+    effect: "deny",
+  });
+  const unreadableAccount = await provisionWithAccount(managedSource);
+  fixture.state.restrictions.pop();
+  assert.equal(unreadableAccount.status, 403, JSON.stringify(unreadableAccount.body));
+  assert.equal(unreadableAccount.body.error.code, "FORBIDDEN");
+  for (const [description, source] of [
+    ["another Namespace", { ...managedSource, namespaceId: foreignNamespaceId }],
+    ["a missing account", { ...managedSource, id: `sa_${randomUUID()}` }],
+  ]) {
+    const refused = await provisionWithAccount(source);
+    assert.equal(refused.status, 404, `${description}: ${JSON.stringify(refused.body)}`);
+    assert.equal(refused.body.error.code, "NOT_FOUND", description);
+  }
+  const acceptedAccount = await provisionWithAccount(managedSource);
+  assert.equal(acceptedAccount.status, 503, JSON.stringify(acceptedAccount.body));
+  assert.equal(acceptedAccount.body.error.code, "DEPENDENCY_UNAVAILABLE");
 
   const oversized = await injectedRequest(
     fixture.app,

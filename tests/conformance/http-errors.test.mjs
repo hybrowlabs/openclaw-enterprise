@@ -12,6 +12,7 @@ import {
 import { PresetValidationError } from "../../packages/contracts/src/index.ts";
 import { normalizeRequestSecretBindings } from "../../packages/occ/src/agent-provisioning.ts";
 import {
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -221,6 +222,15 @@ const cases = [
       status: 400,
       code: "INVALID_REQUEST",
       message: "The Configuration does not select a supported Harness.",
+    },
+  ],
+  [
+    "an unlisted Harness credential source",
+    new AgentCredentialSourceBindingError(),
+    {
+      status: 400,
+      code: "INVALID_REQUEST",
+      message: "The Harness credential source must be listed in the Agent's credentialSources.",
     },
   ],
   [
