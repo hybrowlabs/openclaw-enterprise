@@ -164,8 +164,8 @@ after a failed run.
 | `carol`, not attached, lands on `/console/?authError=oidc`, is audited `EXTERNAL_IDENTITY_REJECTED`, and no account exists.                                                                                     |
 | Console sign-out deletes the OCE session; one click signs `alice` in again without a login form while the Keycloak session lives. Disabling her in Keycloak keeps the OCE session and refuses the next sign-in. |
 
-The `alice` flow is also the real-token proof of the single-audience rule; provider-outage
-fail-closed behaviour stays with its `fakeOidc` test.
+The `alice` flow proves acceptance of Keycloak's default token. Extra audience rejection
+and provider-outage fail-closed behaviour remain covered by synthetic `fakeOidc` tests.
 
 The lane joins `scripts/ci/test-suites.json`, the `full` group and the Full Integration
 matrix at once and runs as its own job on `blacksmith-8vcpu-ubuntu-2404` with a 25-minute
