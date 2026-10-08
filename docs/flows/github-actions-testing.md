@@ -82,7 +82,7 @@ the temporary rule after verification. `dev-up-k3d` admits branches
 without protected credentials, outside `all` and PR gates. It prepares
 Go, the same-source CLI, Chromium and k3d on a disposable Ubuntu 22.04 VM;
 file and job deadlines are 150 and 180 minutes. Other non-main
-lanes and tags are rejected. Manual dispatches serialize without cancellation:
+lanes and tags are rejected. Dispatches serialize without in-progress cancellation:
 `dev-up-k3d` per branch, others in `full-integration`. The provider environment
 permits only `main` without per-run review; other credentialed environments require reviewer approval.
 Results prove only the selected lane.
