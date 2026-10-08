@@ -1,6 +1,8 @@
 ARG OPENCLAW_COMMIT=11d3d04a1279781a770f6a6aa09e6322b064b80a
 ARG NODE_BASE_IMAGE=docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 ARG NODE_RUNTIME_BASE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+# HYBA-2011: rootless builders hide the cgroup limit, so the upstream build needs an explicit tsdown heap (MB); empty keeps upstream auto-detection.
+ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 
 # The credential client build needs only Node and pnpm. The slim runtime base
 # is already in the final image, so a CI build whose controller sources changed
@@ -108,7 +110,9 @@ RUN --mount=type=secret,id=build-ca,required=false \
 COPY --from=openclaw-source /source/ ./
 # Follow the pinned upstream Docker assembly; plugin-local dependencies remain
 # separate when a plugin and core require different versions.
+ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
 RUN OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS=codex,mattermost,slack \
+    OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" \
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm_config_verify_deps_before_run=false \
     pnpm build:docker \
     && pnpm_config_verify_deps_before_run=false pnpm ui:build
