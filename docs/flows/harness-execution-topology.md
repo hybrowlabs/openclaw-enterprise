@@ -83,14 +83,12 @@ approved harness, and calls `ComputeDriver.prepareRevision`.
 
 `apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.prepareRevision`
 
-Docker starts an embedded gateway or dedicated Codex container but does not
-support the harness-auth binding contract, so it has no currently deployable Agent
-path; unsupported bindings fail before deployment.
-In the underlying container path, `dockerGatewayConfigurationDocument` admits only
-supported authentication fields and modes, and `reconcileGateway` generates the
-managed `OPENCLAW_GATEWAY_PASSWORD` only for a new container. The
-[Docker gateway authentication reference](../reference/drivers/docker-compute.md#gateway-authentication)
-owns the mode and password rules.
+Docker's underlying container path supports embedded Gateways and dedicated Codex,
+but rejects harness-auth bindings before deployment; no Agent path is deployable.
+`dockerGatewayConfigurationDocument` admits supported authentication fields/modes;
+`reconcileGateway` generates `OPENCLAW_GATEWAY_PASSWORD` only for new containers.
+The [Docker gateway authentication reference](../reference/drivers/docker-compute.md#gateway-authentication)
+owns these rules.
 
 Kubernetes supports managed bindings.
 SSH supports `{ "method": "runtime" }` only for embedded OpenClaw: operator
@@ -99,20 +97,19 @@ validation. See the [SSH flow](pr-24-ssh-compute.md).
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.prepareRevision`
 
-Kubernetes workload rendering calls `prepareHarnessAuth` once for the resolved
-source. It projects the OCC Secret key only into embedded OpenClaw or a dedicated
-Harness. Canonical sources live in the tenant storage target; Compute delivers selected fields into an
-exact revision-owned Harness Secret, including the account token for ChatGPT.
-Dedicated gateways receive neither model source. This namespace-local delivery
-also applies to fixture images without native runtime configuration; only the
+Kubernetes calls `prepareHarnessAuth` once per resolved source. From canonical
+tenant storage, Compute projects selected fields, including ChatGPT account tokens,
+into exact revision-owned Harness Secrets. Only embedded OpenClaw or dedicated
+Harnesses receive model credentials; dedicated Gateways do not. Fixture images use
+the same namespace-local delivery without native runtime configuration; only the
 native dedicated transport token depends on that configuration.
 See the [harness authentication flow](native-service-account-credential-delivery.md)
 for admission, immutable source snapshots, and worker reauthorization.
 
-Configured API composition, including development, and worker startup call
-`KubernetesComputeDriver.preflight` through the optional Compute contract
-before tenant reconciliation. In a single cluster it checks every page of storage
-namespaces and refuses a legacy split target without altering its labels or state.
+API composition, including development, and worker startup call the optional
+`KubernetesComputeDriver.preflight` before tenant reconciliation. Single-cluster
+preflight checks every storage-namespace page and refuses legacy split targets
+without changing labels or state.
 The [upgrade requirements](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
 own the operator boundary.
 
@@ -176,13 +173,12 @@ Every Pod template Kubernetes Compute renders carries the ordinary
 Ordinary allow policies and Gateway/Harness peers require it, and readiness
 rejects a template without it.
 
-When a selected SandboxDriver provisions the dedicated Harness,
-`providerHarnessReady` lists Pods using the active Service's Agent/revision/role
-labels and requires exactly one nonterminating `Ready=True` candidate with the
-supplied Harness labels; malformed or incomplete observations throw through the
-existing preparation cleanup path. `activateRevision` repeats this check before
-changing routing. See the [Kubernetes readiness contract](../reference/drivers/kubernetes-compute.md#requirements)
-for candidate rules and the limits of this observation.
+For Sandbox-provisioned Harnesses, `providerHarnessReady` lists Pods by the active
+Service's Agent/revision/role labels. It requires exactly one nonterminating `Ready=True`
+candidate with the supplied Harness labels; malformed or incomplete observations
+throw through preparation cleanup. `activateRevision` repeats the check before
+routing changes. The [Kubernetes readiness contract](../reference/drivers/kubernetes-compute.md#requirements)
+defines candidate rules and observation limits.
 
 ### 3. Publish safely and complete activation once
 
@@ -211,23 +207,19 @@ for example after rejected model authentication, the next revision's preparation
 repairs it with its own template instead of waiting on the failed predecessor.
 The repair deletes an embedded predecessor's revision Secret and ConfigMap copies.
 
-The worker commits the database `activeRevisionId` with an exact compare-and-set
-before Kubernetes default after-commit activation.
-`KubernetesComputeDriver.activateRevision` updates the shared gateway's `Recreate`
-Deployment and Service. Embedded preparation does not validate the replacement's
-credentials, so cutover can stop the serving gateway before the replacement
-validates them in its own
-[startup](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
-The same bounded check
-runs for initial and replacement gateways. A failed check, including a provider
-timeout or rate limit, holds the gateway unready until repair and restart or a
-new deployment. Readiness polling does not repeat model requests; worker retries
-do not restart an unchanged Pod. No automatic rollback restores the predecessor.
-Embedded activation also deletes embedded predecessor copies when it re-renders
-the Gateway, even if the replacement never becomes ready.
-For a dedicated predecessor, activation preserves copies while its Harness
-Deployment or terminating Pod survives. Normal retirement stops the Harness
-and removes the artifacts.
+The worker commits `activeRevisionId` by exact compare-and-set before Kubernetes
+activation. `KubernetesComputeDriver.activateRevision` updates the shared Gateway's
+`Recreate` Deployment and Service. Embedded preparation does not validate credentials,
+so cutover can stop the serving Gateway before replacement
+[startup](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup)
+validates them. Initial and replacement Gateways use the same bounded check;
+failures, including provider timeouts/rate limits, hold them unready until repair
+and restart or a new deployment. Readiness polling does not repeat model requests;
+worker retries do not restart unchanged Pods. There is no automatic rollback.
+Embedded activation deletes embedded predecessor copies when re-rendering, even
+if the replacement never becomes ready. For a dedicated predecessor, copies remain
+while its Harness Deployment or terminating Pod survives; normal retirement stops
+the Harness and removes the artifacts.
 
 If activation, readiness, predecessor retirement, or audit completion fails,
 the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`, or a
@@ -265,19 +257,18 @@ runtime assets and reconnects with the paired identity; readiness waits for the
 bounded identity check. The compile cache and model-probe state stay in node
 state and `TMPDIR`, which a Sandbox Driver can grant.
 
-For a selected Sandbox Driver, stopping or retiring a revision always runs its
-required cleanup after stopping a Compute-owned ordinary Harness, or delegates
-provider-owned Harness removal to that cleanup. An absent ordinary Deployment
-does not skip cleanup, so a cleanup failure remains retryable.
-Revision retirement retains both owned claims even after stop removed the
-gateway. When another revision's Gateway or route survives, retirement checks its exact
-revision ownership before deleting resources. A successor in the shared namespace
-keeps its Gateway Deployment, identity, Service and policies. `apps/controller/src/worker.ts:ControllerWorker.processAgentDeletion`
-retires every revision before calling
+Stopping or retiring a revision always runs the selected Sandbox Driver's cleanup:
+after Compute stops an ordinary Harness, or to remove a provider-owned Harness.
+An absent ordinary Deployment does not skip cleanup; failures remain retryable.
+Retirement retains both owned claims after Gateway removal and checks the retiring
+revision's ownership before deleting resources. Successors keep
+their Gateway Deployment, identity, Service and policies.
+`apps/controller/src/worker.ts:ControllerWorker.processAgentDeletion` retires every
+revision, then calls
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.deleteAgentRuntimeCredentials`
-to delete exact-owned private and shared claims by UID. Final deletion checks
-all selected targets, independently of the Agent draft's current execution mode. Cleanup failures retry
-before the worker removes the Agent's database identity. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#gateway-storage)
+to delete exact-owned private and shared claims by UID across all selected targets,
+regardless of the Agent draft's mode. Cleanup retries precede database identity
+removal. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#gateway-storage)
 owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 
 ## Debugging and Verification
