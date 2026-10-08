@@ -275,6 +275,44 @@ async function exportedOccEventPattern() {
   return new RegExp(pattern.replaceAll("$$", "$"));
 }
 
+test("the Collector bounds the native-admin pending-work diagnostic", async () => {
+  const event = "native_admin.pending_work_unresolved";
+  const pattern = await exportedOccEventPattern();
+  assert.ok(pattern.test(event), "the documented shutdown diagnostic reaches the backend");
+  for (const name of [`${event}.detail`, `${event}-unreviewed`, "native_admin.other_event"]) {
+    assert.equal(pattern.test(name), false, "nearby unreviewed diagnostics stay local");
+  }
+  const collector = loadYaml(await readFile(join(root, "deploy/logging/collector.yaml"), "utf8"));
+  const statements = collector.processors["transform/operational"].log_statements.flatMap(
+    ({ statements }) => statements,
+  );
+  const projection = statements.filter((entry) =>
+    entry.includes('attributes["occ.native_admin.pending"]'),
+  );
+  assert.ok(
+    statements.includes(
+      'keep_keys(cache["record"], ["event", "pending", "level", "severity"]) where attributes["event.name"] == "native_admin.pending_work_unresolved"',
+    ),
+    "untrusted extra fields cannot enter the generic OCC projections",
+  );
+  assert.equal(projection.length, 1, "the pending count has one bounded projection");
+  assert.match(
+    projection[0],
+    /attributes\["event.name"\] == "native_admin\.pending_work_unresolved"/,
+  );
+  assert.match(
+    projection[0],
+    /\(IsInt\(cache\["record"\]\["pending"\]\) or IsDouble\(cache\["record"\]\["pending"\]\)\)/,
+  );
+  assert.match(projection[0], /cache\["record"\]\["pending"\] >= 0/);
+  assert.match(projection[0], /cache\["record"\]\["pending"\] <= 9007199254740991/);
+  assert.match(
+    projection[0],
+    /Int\(cache\["record"\]\["pending"\]\) == cache\["record"\]\["pending"\]/,
+  );
+  assert.ok(statements.includes('set(body, attributes["event.name"])'));
+});
+
 async function sourceFiles(directory, extensions) {
   return (await readdir(join(root, directory), { recursive: true }))
     .filter((path) => extensions.some((extension) => path.endsWith(extension)))
@@ -1354,6 +1392,34 @@ test(
                 revisionId,
               }),
               line({ severity: "WARN", event: "native_admin.websocket_denial_audit_failed" }),
+              // Shutdown exports only its bounded pending count; payloads and identities stay local.
+              ...[
+                0,
+                7,
+                9007199254740991,
+                -1,
+                1.5,
+                "7",
+                9007199254740992,
+                true,
+                null,
+                { private: canary },
+              ].map((pending) =>
+                line({
+                  severity: "WARN",
+                  event: "native_admin.pending_work_unresolved",
+                  pending,
+                  message: canary,
+                  userId: canary,
+                  requestId,
+                  namespaceId,
+                  agentId,
+                  revisionId,
+                  code: "UNREVIEWED_EXTRA",
+                  payload: { private: canary },
+                }),
+              ),
+              line({ severity: "WARN", event: "native_admin.pending_work_unresolved.detail" }),
               // Account IDs and messages that name them stay in local logs.
               line({
                 severity: "WARN",
@@ -1469,6 +1535,15 @@ test(
           "occ.revision.id": revisionId,
         }),
         api("WARN", { "event.name": "native_admin.websocket_denial_audit_failed" }),
+        ...["0", "7", "9007199254740991"].map((pending) =>
+          api("WARN", {
+            "event.name": "native_admin.pending_work_unresolved",
+            "occ.native_admin.pending": pending,
+          }),
+        ),
+        ...Array.from({ length: 7 }, () =>
+          api("WARN", { "event.name": "native_admin.pending_work_unresolved" }),
+        ),
         api("WARN", { "event.name": "authentication.activation-warning" }),
         api("WARN", {
           "event.name": "authentication.password-sign-in-warning",

@@ -1,7 +1,7 @@
 ---
 created: "2026-09-19"
 updated: "2026-10-08"
-last_updated_session: authoring-run/5f9fde5c-b06d-4572-b39d-9cbeff312f38
+last_updated_session: "authoring-run/0833a32e-8d5b-43b1-b039-a52a7747a56b"
 ---
 
 # Agent Native Admin UI Flow
@@ -79,9 +79,9 @@ The warning text tells operators that native admin access can change gateway sta
 `apps/controller/src/http/native-admin.ts:resolveNativeAdminAvailability`
 `packages/occ/src/index.ts:getAdministerableActiveAgentRevision`
 
-The status handler validates the human session, preserves the OCC exact-Agent `administer` authorization and existence boundary, then delegates to `resolveNativeAdminAvailability`. The resolver returns `disabled` only after that protected boundary succeeds. When enabled, it requires a configured public origin and native admin domain, then calls `controller.getAdministerableActiveAgentRevision`. That controller method authorizes exact Agent `administer` and loads the Agent before inspecting its state. If the Agent is stopped and has no `activeRevisionId`, it raises `ResourceConflictError`; the resolver returns only `status: "stopped"`. This covers new Agents and completed stops. If active-revision selection instead raises `NoActiveAgentRevisionError`, as for a desired-running Agent awaiting activation, the resolver returns `unavailable` in a successful status envelope. Any other `DependencyUnavailableError` (an IAM or State outage) reaches the error handler as `503`. The console asks the operator to check the Agent's deployment and refresh access; private gateway routing has not been evaluated. The panel always reports the Agent's active revision, independently of the viewed snapshot. Authorization denial remains a protected-route `403` and preserves the human IAM denial audit.
+The status handler validates the human session and delegates to `resolveNativeAdminAvailability`. The resolver authorizes exact-Agent `administer` and checks existence before returning `disabled`. When enabled, it requires the public origin and native admin domain, then calls `controller.getAdministerableActiveAgentRevision` to authorize and load the Agent. A stopped Agent without an `activeRevisionId` raises `ResourceConflictError` and returns only `status: "stopped"`, covering new Agents and completed stops. `NoActiveAgentRevisionError` returns `unavailable`; other dependency failures, including IAM or State outages, return `503`. The panel uses the active revision independently of the viewed snapshot. Authorization denials remain audited `403` responses.
 
-After active revision selection succeeds, OCC derives the native target. If the Agent's desired runtime state is not `running`, the resolver returns `stopped` with the derived host and origin. If `nativeAdminConfigurationSupported` rejects trusted-proxy auth, admin identity scopes, admin device auto-approval, `controlUi.enabled`, exact `allowedOrigins`, or host-header fallback/device-auth settings, the resolver returns `unsupported` with the same derived target. If the selected Compute Driver cannot provide a gateway endpoint or the endpoint is not a clean private `wss:` URL, it also returns `unsupported`. Only the `available` result carries the private `gatewayBase`; `nativeAdminAvailabilityData` omits that value from the browser API response.
+OCC then derives the native target. An Agent not desired running returns `stopped` with its host and origin. Unsupported trusted-proxy authentication, admin identity/device scopes, control UI settings, exact allowed origins, host-header fallback, disabled device authentication, or a missing clean private `wss:` endpoint return `unsupported`. Only `available` carries the private `gatewayBase`, which `nativeAdminAvailabilityData` omits from the browser response.
 
 ### 4. OCC derives the isolated Agent host
 
@@ -89,7 +89,7 @@ After active revision selection succeeds, OCC derives the native target. If the 
 
 `deriveNativeAdminHost` hashes Installation ID, Namespace ID, and Agent ID into an opaque label under the configured domain. `nativeAdminTarget` replaces the hostname of `publicOrigin` with that derived Agent host and returns `/` as the browser entrypoint for that Agent.
 
-The host hash is not reversible. Native-host admission resolves the host back to an exact Agent by checking existing Installation, Namespace, and Agent state for the derived host. Unknown hosts, wrong suffixes, deleted Agents, and non-unique matches fail closed. This flow does not add a persistent host registry.
+The opaque host is resolved against existing Installation, Namespace, and Agent state; no persistent host registry is added. Unknown hosts, wrong suffixes, deleted Agents, and non-unique matches fail closed.
 
 `nativeAdminGatewayHttpBase` accepts only a `wss:` endpoint without username, password, query, or hash, then converts it to `https:` while preserving authority and the Agent base path. This keeps workspace-file WSS behavior unchanged while defining the private HTTP base needed by the native UI bridge.
 
@@ -147,8 +147,9 @@ The WebSocket proxy requires a non-null exact Agent `Origin`, forwards a sanitiz
 Admission remains tracked through its audit attempt, alongside close audits.
 Shutdown gives that work one five-second drain wait, including an admission that
 becomes an append during the wait. Expiry logs `native_admin.pending_work_unresolved`
-with the pending count and retains ownership until settlement while the process
-lives. This wait does not cancel producers or guarantee durable delivery. Stalled
+with the pending count. The Collector exports that exact event and bounded count,
+without request or user context. Ownership continues until settlement while the
+process lives. The wait does not cancel producers or guarantee durable delivery. Stalled
 work can accumulate, and process exit can prevent or interrupt an audit attempt.
 
 ### 8. Runtime renders HTML on a separate origin
@@ -203,6 +204,8 @@ The init container cannot write through the gateway's later mount path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-08 10:11: Shortened the flow and documented bounded pending-work diagnostic export. (authoring-run/0833a32e-8d5b-43b1-b039-a52a7747a56b - ba634da549c9506813c0cafe07dc4aea79187e43)
 
 - 2026-10-08 06:22: Track admission through denial audit, close refused sockets promptly, and document bounded shutdown waiting with unresolved work. (authoring-run/5f9fde5c-b06d-4572-b39d-9cbeff312f38 - 5b82d7898d6880c32c0d45d96dcd1016056f1e13)
 
