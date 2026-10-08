@@ -104,7 +104,8 @@ before the first revision, deployment also requires exact-Agent `read` and
 block deployment and require operator investigation. A
 successful `202` means the immutable revision was admitted and its work queued;
 it does not mean the workload is ready. Admission also grants the caller
-[exact read of the new revision](../authorization.md#deployer-revision-read). Later Configuration edits or changes to
+[exact read of the new revision](../authorization.md#deployer-revision-read)
+unless a Restriction denies that read. Later Configuration edits or changes to
 an account's selected credential reference affect only future deployments. A
 snapshot freezes a Secret reference, not the value stored at that reference.
 

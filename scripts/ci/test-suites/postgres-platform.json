@@ -154,7 +154,7 @@
     {
       "path": "tests/integration/postgres-deployer-revision-read.test.mjs",
       "expectedTests": [
-        "a deploy grants its deployer exact read of the admitted revision, audited and removed with the Agent"
+        "a deploy grants its deployer exact read of the admitted revision unless a Restriction denies it, audited and removed with the Agent"
       ]
     },
     {

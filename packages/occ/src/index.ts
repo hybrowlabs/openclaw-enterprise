@@ -691,22 +691,30 @@ export interface DeployAgentAuthorization {
 
 /**
  * Why deploy admission wrote no revision-read grant for its caller: the caller can already
- * read the revision, the selected IAM Driver keeps policy outside platform State, or the
- * caller is not a valid Namespace binding subject (for example an Installation-scoped
- * ServicePrincipal).
+ * read the revision, a deny Restriction on that read applies (it would override the grant),
+ * the selected IAM Driver keeps policy outside platform State, or the caller is not a valid
+ * Namespace binding subject (for example an Installation-scoped ServicePrincipal).
  */
 export type DeployerRevisionReadSkip =
-  "already-readable" | "external-iam-policy" | "subject-not-bindable";
+  "already-readable" | "external-iam-policy" | "restricted" | "subject-not-bindable";
 
 /** The deployer's read grant on the admitted revision, or why admission wrote none. */
 export type DeployerRevisionReadGrant =
   | {
       readonly grantedAccessBindings: readonly [RemovedAccessBinding];
       readonly revisionReadGrantSkipped?: undefined;
+      readonly revisionReadRestrictionIds?: undefined;
     }
   | {
       readonly grantedAccessBindings: readonly [];
-      readonly revisionReadGrantSkipped: DeployerRevisionReadSkip;
+      readonly revisionReadGrantSkipped: Exclude<DeployerRevisionReadSkip, "restricted">;
+      readonly revisionReadRestrictionIds?: undefined;
+    }
+  | {
+      readonly grantedAccessBindings: readonly [];
+      readonly revisionReadGrantSkipped: "restricted";
+      /** The applicable Restrictions, from the read decision's evidence; never empty. */
+      readonly revisionReadRestrictionIds: readonly [string, ...string[]];
     };
 
 export type AuthorizedAgentDeployment = DeployerRevisionReadGrant & {
@@ -721,8 +729,14 @@ export type AuthorizedAgentDeployment = DeployerRevisionReadGrant & {
 export function deployerRevisionReadAuditDetails(
   grant: Readonly<DeployerRevisionReadGrant>,
 ): Readonly<Record<string, unknown>> {
-  return grant.revisionReadGrantSkipped === undefined
-    ? { grantedAccessBindings: grant.grantedAccessBindings }
+  if (grant.revisionReadGrantSkipped === undefined) {
+    return { grantedAccessBindings: grant.grantedAccessBindings };
+  }
+  return grant.revisionReadGrantSkipped === "restricted"
+    ? {
+        revisionReadGrantSkipped: grant.revisionReadGrantSkipped,
+        revisionReadRestrictionIds: grant.revisionReadRestrictionIds,
+      }
     : { revisionReadGrantSkipped: grant.revisionReadGrantSkipped };
 }
 
@@ -7978,7 +7992,7 @@ export class OpenClawController {
     principalId: string,
     revision: Readonly<AgentRevision>,
   ): Promise<Readonly<DeployerRevisionReadGrant>> {
-    const skipped = (revisionReadGrantSkipped: DeployerRevisionReadSkip) =>
+    const skipped = (revisionReadGrantSkipped: Exclude<DeployerRevisionReadSkip, "restricted">) =>
       Object.freeze({
         grantedAccessBindings: Object.freeze([] as const),
         revisionReadGrantSkipped,
@@ -7997,8 +8011,19 @@ export class OpenClawController {
     ) {
       return skipped("external-iam-policy");
     }
-    if (await this.canRead(principalId, target)) {
+    const { decision } = await this.authorizationDecision(principalId, "read", target);
+    if (decision.allowed) {
       return skipped("already-readable");
+    }
+    const [restrictionId, ...moreRestrictionIds] = decision.evidence.restrictionIds;
+    if (restrictionId !== undefined) {
+      // A matching deny Restriction overrides even an exact binding, so a grant could not make
+      // the revision readable. Deploy still succeeds: the Restriction names read, not deploy.
+      return Object.freeze({
+        grantedAccessBindings: Object.freeze([] as const),
+        revisionReadGrantSkipped: "restricted" as const,
+        revisionReadRestrictionIds: Object.freeze([restrictionId, ...moreRestrictionIds] as const),
+      });
     }
     const namespaceId = revision.namespaceId;
     // One Role per Namespace, like the provisioning Secret grant; Roles are immutable, so a

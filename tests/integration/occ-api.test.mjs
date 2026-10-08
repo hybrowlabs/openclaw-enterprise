@@ -6197,7 +6197,7 @@ test("deploy audit preserves its authorization decision and rolls back with appe
   assert.equal(fixture.auditSink.events.length, failureAuditCount);
 });
 
-test("deploy grants the deployer exact revision read only when it can hold the binding", async () => {
+test("deploy grants the deployer exact revision read only when it can hold and use the binding", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
     request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
@@ -6252,8 +6252,7 @@ test("deploy grants the deployer exact revision read only when it can hold the b
     false,
   );
 
-  // A person with deploy but no revision read gets exact read of the revision she admitted,
-  // named in the deploy audit event.
+  // A person who may deploy but not read revisions.
   const { principal: member } = await fixture.createAuthPrincipal("deployer-read-member");
   fixture.state.identities.push(member);
   fixture.state.roles.push({
@@ -6268,26 +6267,53 @@ test("deploy grants the deployer exact revision read only when it can hold the b
     subjectId: member.id,
     roleId: "role-deployer-read-member",
   });
-  const deployed = await injectedRequest(
-    fixture.createApp(member),
-    "POST",
-    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  const deployAsMember = async () => {
+    const admitted = await injectedRequest(
+      fixture.createApp(member),
+      "POST",
+      `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+    );
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const event = fixture.auditSink.events.find(
+      (candidate) =>
+        candidate.action === "openclaw.agents.deploy" && candidate.resource.id === admitted.data.id,
+    );
+    return { revision: admitted.data, details: event?.details };
+  };
+
+  // A matching deny Restriction on revision read overrides even an exact binding, so a grant
+  // would have no effect: the deploy still succeeds, writes no Role or binding, and its event
+  // names the Restriction instead.
+  fixture.state.restrictions.push({
+    id: "restriction-revision-read",
+    action: "read",
+    resourceKind: "agent_revision",
+    effect: "deny",
+  });
+  const restricted = await deployAsMember();
+  assert.equal(restricted.details?.revisionReadGrantSkipped, "restricted");
+  assert.deepEqual(restricted.details?.revisionReadRestrictionIds, ["restriction-revision-read"]);
+  assert.equal(restricted.details?.grantedAccessBindings, undefined);
+  assert.deepEqual(await policy("access-bindings"), []);
+  assert.equal(
+    (await policy("roles")).some((role) => role.id === deployerRole),
+    false,
   );
-  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  fixture.state.restrictions.pop();
+
+  // Without it she gets exact read of the revision she admitted, named in the deploy event.
+  const deployed = await deployAsMember();
   const grant = {
-    id: `binding_${deployed.data.id}_deployer_read`,
+    id: `binding_${deployed.revision.id}_deployer_read`,
     subjectKind: "identity",
     subjectId: member.id,
     roleId: deployerRole,
     resourceKind: "agent_revision",
-    resourceId: deployed.data.id,
+    resourceId: deployed.revision.id,
   };
-  const event = fixture.auditSink.events.find(
-    (candidate) =>
-      candidate.action === "openclaw.agents.deploy" && candidate.resource.id === deployed.data.id,
-  );
-  assert.deepEqual(event?.details?.grantedAccessBindings, [grant]);
-  assert.equal(event?.details?.revisionReadGrantSkipped, undefined);
+  assert.deepEqual(deployed.details?.grantedAccessBindings, [grant]);
+  assert.equal(deployed.details?.revisionReadGrantSkipped, undefined);
+  assert.equal(deployed.details?.revisionReadRestrictionIds, undefined);
   assert.deepEqual(
     (await policy("access-bindings")).filter((binding) => binding.roleId === deployerRole),
     [{ ...grant, namespaceId: namespace.id }],

@@ -320,16 +320,17 @@ credentials.
 ### Deployer revision read
 
 A deploy grants its caller exact `agent_revision:read` on the revision it
-admits, in the admission transaction, unless the caller can already read it.
-The binding (`binding_<revisionId>_deployer_read`) uses the Namespace Role
+admits, in the admission transaction, unless the caller can already read it or
+a deny [Restriction](#restrictions) on that read applies; the deploy still
+succeeds. The binding (`binding_<revisionId>_deployer_read`) uses the Namespace Role
 `role_<namespaceId>_deployed_revision_read`, "Deployed revision read", which
 deploy creates on first use. The deploy audit event lists it in
 `grantedAccessBindings`, or gives `revisionReadGrantSkipped` when none was
-written. Deploy already requires read on the Configuration
-the revision snapshots and returns that snapshot, so the grant reveals nothing
-new. Other readers of the Agent, such as a Console sharee, still need their own
-revision grants. Administrators can delete the binding; Agent deletion removes
-it with the revision. The skip reasons are `already-readable`,
+written. Deploy already requires Configuration read and returns the snapshot,
+so the grant reveals nothing new. Other readers of the Agent, such as a Console
+sharee, still need their own revision grants. Administrators can delete the
+binding; Agent deletion removes it with the revision. The skip reasons are
+`already-readable`, `restricted` (IDs in `revisionReadRestrictionIds`),
 `subject-not-bindable` (not a valid Namespace binding subject, such as an
 Installation-scoped ServicePrincipal) and `external-iam-policy` (the IAM Driver keeps policy
 outside platform State).

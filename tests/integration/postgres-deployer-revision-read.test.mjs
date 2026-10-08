@@ -18,7 +18,7 @@ const authSecret = "deployer-revision-read-postgres-auth-secret-minimum-32";
 const byId = (left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 
 test(
-  "a deploy grants its deployer exact read of the admitted revision, audited and removed with the Agent",
+  "a deploy grants its deployer exact read of the admitted revision unless a Restriction denies it, audited and removed with the Agent",
   requiresPostgres,
   async (t) => {
     // Account provisioning as the development PostgreSQL composition wires it, so an
@@ -79,8 +79,8 @@ test(
     }
     const deployer = await person("deployer");
     const sharee = await person("sharee");
-    const bind = async (subjectId, roleId, resourceKind, resourceId) => {
-      const binding = await inject("POST", `${policyPath}/access-bindings`, {
+    const bind = async (namespaceId, subjectId, roleId, resourceKind, resourceId) => {
+      const binding = await inject("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
         subjectKind: "identity",
         subjectId,
         roleId,
@@ -89,31 +89,41 @@ test(
       });
       assert.equal(binding.statusCode, 201, binding.body);
     };
-    // The deployer may deploy this Agent: deploy needs Agent deploy, Configuration read and
+    // Lets the deployer deploy one Agent: deploy needs Agent deploy, Configuration read and
     // operate on the Harness Secret. Nothing grants revision read.
-    const member = await inject("POST", `${policyPath}/roles`, {
-      permissions: [
-        { action: "read", resourceKind: "agent" },
-        { action: "deploy", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "operate", resourceKind: "secret" },
-      ],
-    });
-    assert.equal(member.statusCode, 201, member.body);
-    await bind(deployer.id, member.json().data.id, "agent", agent.id);
-    await bind(deployer.id, member.json().data.id, "configuration", agent.configurationId);
-    await bind(deployer.id, member.json().data.id, "secret", secretRef.id);
+    async function allowDeploy(target) {
+      const member = await inject("POST", `/namespaces/${target.namespace.id}/iam/roles`, {
+        permissions: [
+          { action: "read", resourceKind: "agent" },
+          { action: "deploy", resourceKind: "agent" },
+          { action: "read", resourceKind: "configuration" },
+          { action: "operate", resourceKind: "secret" },
+        ],
+      });
+      assert.equal(member.statusCode, 201, member.body);
+      const roleId = member.json().data.id;
+      await bind(target.namespace.id, deployer.id, roleId, "agent", target.agent.id);
+      await bind(
+        target.namespace.id,
+        deployer.id,
+        roleId,
+        "configuration",
+        target.agent.configurationId,
+      );
+      await bind(target.namespace.id, deployer.id, roleId, "secret", target.secretRef.id);
+    }
+    await allowDeploy({ namespace, agent, secretRef });
     // The sharee reads the Agent, as the Console share panel grants, and may not deploy.
     const reader = await inject("POST", `${policyPath}/roles`, {
       permissions: [{ action: "read", resourceKind: "agent" }],
     });
     assert.equal(reader.statusCode, 201, reader.body);
-    await bind(sharee.id, reader.json().data.id, "agent", agent.id);
+    await bind(namespace.id, sharee.id, reader.json().data.id, "agent", agent.id);
 
     const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
     const deployerRole = `role_${namespace.id}_deployed_revision_read`;
-    async function deployAs(principal) {
-      const admitted = await principal.request("POST", `${agentPath}/deploy`);
+    async function deployAs(principal, path = agentPath) {
+      const admitted = await principal.request("POST", `${path}/deploy`);
       assert.equal(admitted.statusCode, 202, admitted.body);
       const revision = admitted.json().data;
       const event = await pool.query(
@@ -182,6 +192,49 @@ test(
     assert.deepEqual(
       granted,
       [deployerBinding(second.revision.id), deployerBinding(fourth.revision.id)].sort(byId),
+    );
+
+    // A matching deny Restriction on revision read overrides even an exact binding, so in a
+    // Namespace that restricts it the deployer's deploy still succeeds but writes no Role or
+    // binding, and its event names the Restriction. OCC has no API that writes Restrictions
+    // (they come from the IAM seed), and the application role cannot delete them, so this one
+    // is inserted directly and names only its own Namespace.
+    const fenced = await deployAgent("Deployer read restricted");
+    await allowDeploy(fenced);
+    const restrictionId = `restriction_${randomUUID()}`;
+    await pool.query(
+      `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id)
+       VALUES ($1, $2, 'read', 'agent_revision', NULL)`,
+      [restrictionId, fenced.namespace.id],
+    );
+    const fencedPath = `/namespaces/${fenced.namespace.id}/agents/${fenced.agent.id}`;
+    const restricted = await deployAs(deployer, fencedPath);
+    assert.equal(restricted.details.revisionReadGrantSkipped, "restricted");
+    assert.deepEqual(restricted.details.revisionReadRestrictionIds, [restrictionId]);
+    assert.equal(restricted.details.grantedAccessBindings, undefined);
+    const fencedPolicy = `/namespaces/${fenced.namespace.id}/iam`;
+    const fencedRoleId = `role_${fenced.namespace.id}_deployed_revision_read`;
+    const fencedRoles = await inject("GET", `${fencedPolicy}/roles`);
+    assert.equal(fencedRoles.statusCode, 200, fencedRoles.body);
+    assert.equal(
+      fencedRoles.json().data.some((role) => role.id === fencedRoleId),
+      false,
+    );
+    const fencedBindings = await inject("GET", `${fencedPolicy}/access-bindings`);
+    assert.equal(fencedBindings.statusCode, 200, fencedBindings.body);
+    assert.equal(
+      fencedBindings
+        .json()
+        .data.some(
+          (binding) =>
+            binding.roleId === fencedRoleId || binding.resourceId === restricted.revision.id,
+        ),
+      false,
+    );
+    assert.equal(
+      (await deployer.request("GET", `${fencedPath}/revisions/${restricted.revision.id}`))
+        .statusCode,
+      403,
     );
 
     // The accepted delete event lists the grants among the bindings its completion removes

@@ -141,9 +141,10 @@ Two other operations write exact bindings through the same Driver methods,
 outside these routes. Agent provisioning grants the Agent's ServicePrincipal
 Secret `operate`. Deploy admission
 (`packages/occ/src/index.ts:grantDeployerRevisionRead`) grants a caller who
-cannot already read the new revision exact `agent_revision:read` on it, in the
-deploy transaction; the API's deploy event lists it in `grantedAccessBindings`
-or names why none was written in `revisionReadGrantSkipped`, and an audit
+cannot already read the new revision, and whom no Restriction denies that read,
+exact `agent_revision:read` on it, in the deploy transaction; the API's deploy
+event lists it in `grantedAccessBindings` or names why none was written in
+`revisionReadGrantSkipped`, and an audit
 failure rolls it back with the revision.
 
 State also provides an opt-in Installation authority and native-IAM barrier
