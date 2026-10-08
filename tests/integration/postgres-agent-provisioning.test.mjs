@@ -420,23 +420,35 @@ async function createFixture(context, options = {}) {
     workerCompletion = undefined;
   }
 
-  async function revokeCurrentPrincipal() {
+  // The signed-in administrator's Principal, whose subject is its account: a test may add
+  // other administrators, so the first better-auth Principal is not necessarily this one.
+  async function administratorPrincipalId() {
+    const current = await request("GET", "/api/auth/session");
+    assert.equal(current.status, 200, JSON.stringify(current.body));
     const iam = await state.loadNativeIAMState();
-    const principal = iam.identities.find(
-      (identity) => identity.kind === "principal" && identity.issuer.endsWith(":better-auth"),
+    const principals = iam.identities.filter(
+      (identity) =>
+        identity.kind === "principal" &&
+        identity.issuer.endsWith(":better-auth") &&
+        identity.subject === current.data.user.id,
     );
-    assert.ok(principal, "the bootstrapped administrator Principal must exist");
+    assert.equal(principals.length, 1, "exactly one Principal must match the signed-in account");
+    return principals[0].id;
+  }
+
+  async function revokeCurrentPrincipal() {
+    const principalId = await administratorPrincipalId();
     const result = await pool.query(
       `DELETE FROM occ.iam_access_bindings
        WHERE identity_subject_id = $1
          AND namespace_id IS NULL
        RETURNING id, namespace_id, identity_subject_id, group_subject_id, role_id,
                  resource_kind, resource_id`,
-      [principal.id],
+      [principalId],
     );
     assert.ok(result.rowCount > 0, "revocation must remove the exact administrator binding");
     revokedBindings.push(...result.rows);
-    return principal.id;
+    return principalId;
   }
 
   function cancelProvisioningAtTeardown(namespaceId, agentId) {
@@ -444,6 +456,7 @@ async function createFixture(context, options = {}) {
   }
 
   return {
+    administratorPrincipalId,
     app,
     bootstrapNamespace,
     cancelProvisioningAtTeardown,
@@ -1559,6 +1572,76 @@ test(
 );
 
 test(
+  "another administrator's pending provisioning request is counted, never named, as a Secret consumer",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    // No worker runs, so administrator A's request stays queued and keeps referencing both Secrets.
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const { workId } = admitted.data.provisioning;
+
+    // Administrator B holds A's Installation-wide administrator Role, so every grant a status
+    // read checks passes; only the initiating-actor check keeps A's request from B.
+    const bindings = await fixture.pool.query(
+      `SELECT role_id FROM occ.iam_access_bindings
+       WHERE identity_subject_id = $1 AND namespace_id IS NULL AND resource_kind IS NULL`,
+      [await fixture.administratorPrincipalId()],
+    );
+    assert.equal(bindings.rows.length, 1, JSON.stringify(bindings.rows));
+    const [{ role_id: administratorRoleId }] = bindings.rows;
+    const second = {
+      email: `postgres-agent-provisioning-second-${randomUUID()}@example.test`,
+      password: `generated-password-${randomUUID()}`,
+    };
+    const created = await fixture.request("POST", "/api/auth/accounts", {
+      body: { ...second, name: "Second administrator", roleId: administratorRoleId },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    // Account seeds scope their binding to the Installation resource; B also holds the Role
+    // across the Installation, like the bootstrap administrator.
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_access_bindings (id, identity_subject_id, role_id) VALUES ($1, $2, $3)`,
+      [`binding_second_admin_${randomUUID()}`, created.data.principalId, administratorRoleId],
+    );
+    const secondSession = await signInToControllerApp(fixture.app, second);
+    const status = await fixture.request("GET", admitted.data.provisioning.url, {
+      session: secondSession,
+    });
+    assert.equal(status.status, 403, JSON.stringify(status.body));
+
+    const secretPath = `/namespaces/${namespace.id}/secrets/${secrets.modelKey.id}`;
+    const own = await fixture.request("GET", secretPath);
+    assert.equal(own.status, 200, JSON.stringify(own.body));
+    assert.deepEqual(own.data.consumers.provisioningRequests, [workId]);
+
+    const read = await fixture.request("GET", secretPath, { session: secondSession });
+    assert.equal(read.status, 200, JSON.stringify(read.body));
+    assert.deepEqual(read.data.consumers, {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+      unreadable: 1,
+      truncated: false,
+    });
+    const refused = await fixture.request("DELETE", secretPath, { session: secondSession });
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(
+      refused.body.error.message,
+      "The Secret is still referenced by 1 resource you cannot read. Remove those references first.",
+    );
+    for (const body of [read.body, refused.body]) {
+      assert.doesNotMatch(JSON.stringify(body), new RegExp(workId));
+    }
+  },
+);
+
+test(
   "a Plugin Driver switch leaves the provisioning status readable; retry still refuses the plan",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
@@ -2144,24 +2227,23 @@ test(
     const account = created.data;
     // Admission would reject this account, which has no Backend-issued credential, so store
     // the plan directly; the worker fails it for the same reason before any effect.
-    const iam = await fixture.state.loadNativeIAMState();
-    const principal = iam.identities.find(
-      (identity) => identity.kind === "principal" && identity.issuer.endsWith(":better-auth"),
-    );
-    assert.ok(principal, "the bootstrapped administrator Principal must exist");
+    const actorId = await fixture.administratorPrincipalId();
     const body = provisioningBody(namespace.id, secrets);
     const workId = `agent-provisioning:${randomUUID().replaceAll("-", "")}`;
     await fixture.state.transact((unit) =>
       unit.provisioning.create({
         workId,
         namespaceId: namespace.id,
-        actorId: principal.id,
+        actorId,
         requestId: body.requestId,
         requestFingerprint: "0".repeat(64),
         plan: {
           name: body.name,
           configuration: body.configuration,
-          harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+          harnessAuth: {
+            method: "codex_pat",
+            source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+          },
           executionMode: body.executionMode,
           drivers: {
             compute: fixture.computeDriver.id,

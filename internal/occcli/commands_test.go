@@ -458,3 +458,63 @@ func TestServiceKeyCreateWritesAPrivateKeyFileAndNeverPrintsTheKey(t *testing.T)
 		t.Fatalf("key file is not the issuance envelope: %s, %v", contents, err)
 	}
 }
+
+func TestServiceKeyCreateLeavesNoKeyFileWhenItCannotSaveAKey(t *testing.T) {
+	requests := 0
+	var lastBody map[string]any
+	status, response := http.StatusForbidden, `{"error":{"code":"FORBIDDEN","message":"denied"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		lastBody = nil
+		_ = json.UnmarshalRead(request.Body, &lastBody)
+		writer.Header().Set("content-type", "application/json")
+		writer.WriteHeader(status)
+		_, _ = writer.Write([]byte(response))
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	adminKey := filepath.Join(directory, "admin.json")
+	if err := os.WriteFile(adminKey, []byte(`{"data":{"key":"admin-key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(directory, "nora.json")
+	run := func(namespace string, args ...string) error {
+		command := New(&bytes.Buffer{}, &bytes.Buffer{})
+		command.SetArgs(append([]string{"--url", server.URL, "--service-key-file", adminKey, "--namespace", namespace, "service-key", "create", "--service-principal", "spn_1", "--name", "nora", "--out", keyFile}, args...))
+		return command.Execute()
+	}
+	assertNoKeyFile := func(step string) {
+		t.Helper()
+		if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
+			t.Fatalf("%s left a key file: %v", step, err)
+		}
+	}
+
+	// Lifetimes outside 1-365 days and malformed Namespace IDs fail before any request.
+	for _, refused := range []struct{ namespace, flag, message string }{
+		{testNamespaceID, "--expires-in-days=366", "between 1 and 365"},
+		{testNamespaceID, "--expires-in-days=-1", "between 1 and 365"},
+		{"default", "--expires-in-days=1", "OCC_NAMESPACE or --namespace"},
+	} {
+		if err := run(refused.namespace, refused.flag); err == nil || !strings.Contains(err.Error(), refused.message) {
+			t.Fatalf("%s %s: error = %v", refused.namespace, refused.flag, err)
+		}
+		assertNoKeyFile(refused.namespace + " " + refused.flag)
+	}
+	if requests != 0 {
+		t.Fatalf("refused arguments sent %d requests", requests)
+	}
+
+	// 365 days is accepted and sent. The server refuses the issuance, so the empty file is removed.
+	if err := run(testNamespaceID, "--expires-in-days=365"); err == nil || requests != 1 || lastBody["expiresIn"] != float64(365*24*60*60) {
+		t.Fatalf("refused issuance: error = %v after %d requests, last body %v", err, requests, lastBody)
+	}
+	assertNoKeyFile("a refused issuance")
+
+	// A response without a key ID is refused rather than saved as a key file.
+	status, response = http.StatusCreated, `{"data":{"name":"nora","key":"occ_secret"},"meta":{"requestId":"r"}}`
+	if err := run(testNamespaceID); err == nil || !strings.Contains(err.Error(), "invalid service key") {
+		t.Fatalf("response without a key ID: error = %v", err)
+	}
+	assertNoKeyFile("a response without a key ID")
+}
