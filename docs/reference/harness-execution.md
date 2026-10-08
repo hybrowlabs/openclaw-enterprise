@@ -283,14 +283,21 @@ explicitly, and test bridges do not establish turnkey production support. See it
 
 ### Native worker support
 
-The pinned OpenClaw [runtime image](../../deploy/runtime/README.md) supports required
-worker placement (`cloudWorkers.requiredProfile`), but still lacks native worker inference.
-Deploy and provisioning therefore refuse dedicated native OpenClaw with
-`400 INVALID_REQUEST`, and the console withholds that choice. Provisioning
-status reads do not recheck this support, so work accepted before it was
-removed still reports its status; retry refuses it. An operator whose
-runtime image is built from an OpenClaw source with both features can declare
+Dedicated native OpenClaw requires automatic required worker placement
+(`cloudWorkers.requiredProfile`) and node-local inference from canonical
+`models.providers` configuration. The pinned [runtime image](../../deploy/runtime/README.md)
+accepts those schemas but lacks complete placement activation for ordinary
+sessions. The default native-worker capability remains disabled: Deploy and
+provisioning refuse the topology, and the Console withholds it. Provisioning
+status reads still report previously accepted work; retry rechecks support.
+
+An operator with a custom image containing both runtime features can declare
 [`runtime.nativeWorkerSupport`](configuration.md#installation-startup-configuration).
+Deployment still requires the qualifying SandboxDriver, admitted authentication,
+and supported workload projections described above. Compute puts the selected
+model metadata and credential reference only in the native node's configuration;
+the Gateway receives no model credential. A missing model or disconnected node
+fails the turn without Gateway inference fallback.
 
 ## Related
 

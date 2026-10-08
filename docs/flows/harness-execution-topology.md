@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-10-07
-last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
+updated: 2026-10-08
+last_updated_session: 01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa
 ---
 
 # Harness Execution Topology Flow
@@ -68,7 +68,9 @@ captures its native configuration, approved harness identity/version, explicit m
 selection, and Agent ServicePrincipal. Production admits approved
 `openclaw`/`embedded` and `codex`/`dedicated`, and `openclaw`/`dedicated` only when
 the selected SandboxDriver provisions Harnesses with networking, filesystem, and
-process containment. An associated
+process containment and the Installation declares a compatible runtime image.
+The pinned source lacks complete placement activation, so its default native
+capability remains disabled. An associated
 `access_token` additionally requires dedicated Codex; the frozen account
 contains only its OCC identity, credential kind, and opaque Secret reference.
 
@@ -148,9 +150,14 @@ across restarts and revisions.
 Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
 owns the native Harness Pod. The OpenClaw Harness enrolls as a paired node, owns
-its identity and workspace, and alone receives the model key. It reads the
-one-use enrollment target from a private file; later starts reuse the persisted
-device token. Compute pins the enrolled device in a generated `dedicated-native`
+its identity and workspace, and alone receives the model key. Compute renders
+the selected model metadata under canonical `models.providers` in the node
+configuration. OpenShell receives the exact revision's setup envelope and
+Gateway CA through its runtime profile provider files, separately from the
+Codex profile. The native entrypoint merges the Gateway CA with inherited model
+transport trust and reads the one-use enrollment target from a private file;
+later starts reuse the persisted device token. Native workers connect outbound
+to the Gateway and do not request the Codex app-server endpoint. Compute pins the enrolled device in a generated `dedicated-native`
 profile with `inference: "worker"`, so a missing or disconnected Harness fails
 the turn rather than using Gateway inference. An exact callback route and
 session-bound worker admission scope the transport to the owning Agent.

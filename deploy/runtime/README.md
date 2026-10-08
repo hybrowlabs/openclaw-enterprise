@@ -36,14 +36,18 @@ the saved device token for the same Gateway, or still refuses the code, as
 upstream `node run --pair-if-needed` already does.
 The source archive and patch hashes identify the resulting custom build.
 
-The selected commit does not support dedicated native OpenClaw. That Harness
-needs both required worker placement (`cloudWorkers.requiredProfile`) and native
-worker inference (`nodeHost.workerRuns.nativeInferenceConfig`). The selected
-commit supports required placement, but still rejects native inference, so the
-Harness refuses to start. `PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS` in
-`packages/occ/src/native-worker-support.ts` records this, and admission refuses
-dedicated native OpenClaw while it is `false`. The images-runtime-startup lane
-runs both entrypoints against this image and fails when the image disagrees with it.
+The selected source accepts canonical node-local inference configuration under
+`models.providers` and the `cloudWorkers.requiredProfile` schema, but lacks
+complete required-placement activation for ordinary sessions. OCE therefore
+keeps `PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS` in
+`packages/occ/src/native-worker-support.ts` false. Enabling the default capability
+requires a source pin containing both placement activation and the Codex
+native-child relay contract already required by OCE.
+
+The images-runtime-startup lane runs the production Gateway and Harness
+entrypoints and validates their generated configuration with this image's
+OpenClaw. This proves schema compatibility; it does not prove required placement,
+enrollment, containment, or real model turns.
 
 | Input                                        | Selection                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |

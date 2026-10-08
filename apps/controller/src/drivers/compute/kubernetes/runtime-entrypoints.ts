@@ -3658,16 +3658,15 @@ function publishRuntimeFailure() {}
 ${OPENCLAW_AUTH_PROBE_HELPERS}
 
 const inferenceConfig = process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG;
-const inferenceConfigPath = process.env.OPENCLAW_NATIVE_INFERENCE_CONFIG_PATH;
 const state = process.env.OPENCLAW_NODE_STATE_DIR;
 const setupCode = process.env.OPENCLAW_NODE_SETUP_CODE;
+const setupEnvelopePath = process.env.OPENCLAW_NODE_SETUP_ENVELOPE;
 const temporary = process.env.TMPDIR;
 const workerCapacity = Number(process.env.OPENCLAW_NATIVE_WORKER_CAPACITY);
 if (
   !inferenceConfig ||
-  !inferenceConfigPath ||
   !state ||
-  !setupCode ||
+  [Boolean(setupCode), Boolean(setupEnvelopePath)].filter(Boolean).length !== 1 ||
   !temporary ||
   !Number.isSafeInteger(workerCapacity) ||
   workerCapacity < 1 ||
@@ -3684,9 +3683,10 @@ if (authenticationFailure !== undefined) {
 } else {
 mkdirSync(state, { recursive: true });
 const workerConfigPath = join(state, "openclaw.json");
-writeFileSync(inferenceConfigPath, inferenceConfig, { mode: 0o600 });
+const nativeConfig = JSON.parse(inferenceConfig);
 writeFileSync(workerConfigPath, JSON.stringify({
-  agents: { defaults: { workspace: "/home/node/workspace" } },
+  ...nativeConfig,
+  agents: { defaults: { ...nativeConfig.agents?.defaults, workspace: "/home/node/workspace" } },
   plugins: {
     allow: ["file-transfer"],
     slots: { memory: "none" },
@@ -3697,7 +3697,6 @@ writeFileSync(workerConfigPath, JSON.stringify({
       enabled: true,
       capacity: workerCapacity,
       isolation: "none",
-      nativeInferenceConfig: inferenceConfigPath,
     },
     skills: { enabled: false },
   },
@@ -3709,20 +3708,25 @@ const nodeEnv = {
   OPENCLAW_STATE_DIR: state,
   OPENCLAW_CONFIG_PATH: workerConfigPath,
 };
-if (process.env.OPENCLAW_NODE_CA_PEM) {
+const gatewayCa = process.env.OPENCLAW_NODE_CA_PEM || (
+  process.env.OPENCLAW_NODE_CA_PATH
+    ? readFileSync(process.env.OPENCLAW_NODE_CA_PATH, "utf8")
+    : undefined
+);
+if (gatewayCa) {
   const caPath = join(state, "gateway-ca.pem");
+  // The node needs both Gateway trust and the Sandbox's model-egress trust.
   const inheritedCa = process.env.NODE_EXTRA_CA_CERTS
     ? readFileSync(process.env.NODE_EXTRA_CA_CERTS, "utf8")
     : "";
-  writeFileSync(
-    caPath,
-    [inheritedCa, process.env.OPENCLAW_NODE_CA_PEM].filter(Boolean).join("\n"),
-    { mode: 0o600 },
-  );
+  writeFileSync(caPath, [inheritedCa, gatewayCa].filter(Boolean).join("\n"), { mode: 0o600 });
   nodeEnv.NODE_EXTRA_CA_CERTS = caPath;
 }
+// Provider files carry the exact revision's setup envelope. Convert it to the
+// private one-shot target file consumed by connect, without exposing it in argv.
+const target = setupCode ?? Buffer.from(readFileSync(setupEnvelopePath, "utf8")).toString("base64url");
 const connectTargetPath = join(state, "connect-target");
-writeFileSync(connectTargetPath, setupCode, { mode: 0o600 });
+writeFileSync(connectTargetPath, target, { mode: 0o600 });
 const child = spawn(
   process.execPath,
   [

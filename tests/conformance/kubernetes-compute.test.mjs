@@ -887,7 +887,12 @@ test("activation refuses a missing or foreign workspace node before changing the
 // With `clock` ({ now }), enrollment waits are simulated on that fake clock: an
 // observation advances it by its whole wait, or to `state.pairAtMs` if the node
 // pairs within the wait, and never sleeps.
-function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
+function dedicatedFirstDeployFixture({
+  statusProxy = true,
+  clock,
+  sandboxDriver,
+  revision: revisionOverrides = {},
+} = {}) {
   const state = {
     setupCalls: 0,
     connected: false,
@@ -916,6 +921,7 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
       ...(statusProxy ? { network: { pluginStatusProxySourceCidrs: ["192.0.2.20/32"] } } : {}),
     }),
     {
+      sandboxDriver,
       nodeEnrollment: {
         async createSetup() {
           state.setupCalls++;
@@ -988,6 +994,7 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
         "codex-plugin:example": { enabled: true, toolDefaults: { approval: "provider_default" } },
       },
     },
+    ...revisionOverrides,
   });
   const operatorSuppliedConfiguration = {
     ...revision.configuration,
@@ -1143,6 +1150,9 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
   clients.core.listNamespacedPod = async ({ labelSelector, namespace: requestedNamespace }) => {
     const labels = Object.fromEntries(labelSelector.split(",").map((entry) => entry.split("=")));
     const role = labels["openclaw.dev/workload-role"];
+    if (role === "agent" && sandboxDriver !== undefined) {
+      return { items: state.providerPod === undefined ? [] : [structuredClone(state.providerPod)] };
+    }
     return {
       items: [
         {
@@ -1258,6 +1268,106 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
     markReady,
   };
 }
+
+test("native OpenClaw preparation and activation use only outbound Sandbox enrollment", async () => {
+  const provisions = [];
+  const sandboxDriver = {
+    id: "native-sandbox",
+    implementation: "openshell",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    async provisionHarness(context) {
+      provisions.push(context);
+      return {
+        namespaceName: context.namespace.name,
+        resourceName: "native-harness",
+        agentId: context.revision.agentId,
+        revisionId: context.revision.id,
+      };
+    },
+    async harnessEndpoint() {
+      assert.fail("native OpenClaw has no inbound Harness endpoint");
+    },
+  };
+  const fixture = dedicatedFirstDeployFixture({
+    sandboxDriver,
+    revision: {
+      harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+      sandboxDriverId: sandboxDriver.id,
+      configuration: admitLoggingConfiguration(
+        createHarnessConfiguration("openclaw", "gpt-5"),
+        "info",
+      ),
+      plugins: undefined,
+    },
+  });
+  const {
+    driver,
+    revision,
+    state,
+    namespace,
+    gatewayName,
+    markReady,
+    prepare,
+    read,
+    objects,
+    key,
+  } = fixture;
+  assert.equal(driver.options.network.providerHarness, undefined);
+  assert.equal((await prepare()).ready, false);
+  markReady(gatewayName);
+  assert.equal((await prepare()).ready, false);
+  assert.equal(provisions.length, 1);
+  const nativeConfig = JSON.parse(
+    provisions[0].requirements.environment.find(
+      ({ name }) => name === "OPENCLAW_NATIVE_INFERENCE_CONFIG",
+    ).value,
+  );
+  assert.equal(nativeConfig.agents.defaults.model, "openai/gpt-5");
+  assert.equal(nativeConfig.models.providers.openai.apiKey, "OPENAI_API_KEY");
+  assert.deepEqual(
+    nativeConfig.models.providers.openai.models.map(({ id }) => id),
+    ["gpt-5"],
+  );
+  // The provider's observed Pod readiness and enrolled node are independent of provisioning.
+  state.providerPod = {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name: "native-harness", namespace, labels: provisions[0].requirements.labels },
+    status: { conditions: [{ type: "Ready", status: "True" }] },
+  };
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+  await assert.rejects(
+    driver.activateRevision(revision, authContext(revision)),
+    /gateway is not ready/,
+  );
+  markReady(gatewayName);
+  await driver.activateRevision(revision, authContext(revision));
+
+  const suffix = digest(revision.agentId);
+  assert.equal(objects.has(key("NetworkPolicy", `allow-gateway-agent-${suffix}`)), false);
+  assert.equal(objects.has(key("NetworkPolicy", `allow-agent-runtime-${suffix}`)), false);
+  assert.equal(objects.has(key("NetworkPolicy", `allow-agent-auth-${suffix}`)), false);
+  const outbound = read("NetworkPolicy", `allow-workspace-node-gateway-${suffix}`);
+  assert.deepEqual(outbound.spec.podSelector, {
+    matchLabels: { "openshell.ai/boundary-role": "supervisor" },
+  });
+  assert.deepEqual(outbound.spec.egress[0].ports, [{ protocol: "TCP", port: 8080 }]);
+  const inbound = read("NetworkPolicy", `allow-gateway-workspace-node-${suffix}`);
+  assert.deepEqual(inbound.spec.ingress[0].from[0].podSelector, {
+    matchLabels: { "openshell.ai/boundary-role": "supervisor" },
+  });
+  const gateway = read("Deployment", gatewayName).spec.template.spec.containers[0];
+  assert.equal(
+    gateway.env.some(({ name }) =>
+      ["APP_SERVER_URL", "APP_SERVER_TOKEN", "OPENAI_API_KEY"].includes(name),
+    ),
+    false,
+  );
+  const harness = read("Service", `agent-${suffix}`);
+  assert.equal(harness.spec.selector["app.kubernetes.io/name"], `agent-${suffix}-inactive`);
+});
 
 // The node wiring a Deployment-backed Codex Harness renders from its first start.
 function harnessNodeSetup(template) {
@@ -5078,27 +5188,27 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   );
   const ownership = { namespaceId: tenant.id, agentId };
   const nativeInference = {
-    models: [
-      {
-        provider: "openai",
-        id: "gpt-5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        contextWindow: 128000,
-        maxTokens: 8192,
-        reasoning: true,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        apiKeyEnv: "OPENAI_API_KEY",
+    agents: { defaults: { model: "openai/gpt-5" } },
+    models: {
+      providers: {
+        openai: {
+          apiKey: "OPENAI_API_KEY",
+          baseUrl: "https://api.openai.com/v1",
+          models: [
+            {
+              id: "gpt-5",
+              name: "gpt-5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              contextWindow: 128000,
+              maxTokens: 8192,
+              reasoning: true,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
       },
-    ],
-    workspaces: [
-      {
-        id: "main",
-        path: "/home/node/.openclaw-node/node-host",
-        scope: "subdirectories",
-        models: ["openai/gpt-5"],
-      },
-    ],
+    },
   };
   const deviceId = "a".repeat(64);
   const gatewayDeployment = driver.deployment(
@@ -5162,7 +5272,7 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.equal(workerProgram.includes('"--pair-if-needed"'), false);
   assert.equal(workerProgram.includes('"--session-host"'), false);
   assert.equal(
-    workerProgram.includes("writeFileSync(connectTargetPath, setupCode, { mode: 0o600 })"),
+    workerProgram.includes("writeFileSync(connectTargetPath, target, { mode: 0o600 })"),
     true,
   );
   assert.equal(
@@ -5177,10 +5287,6 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.equal(workerProgram.includes("initializeRuntimeAssets();"), true);
   assert.equal(workerProgram.includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
   assert.equal(workerProgram.includes('publishImageTree("/app/custodian-skills"'), true);
-  assert.equal(
-    workerProgram.includes('agents: { defaults: { workspace: "/home/node/workspace" } }'),
-    true,
-  );
   assert.equal(
     worker.env.find(({ name }) => name === "OPENCLAW_NATIVE_WORKER_CAPACITY")?.value,
     "12",

@@ -66,20 +66,20 @@ not select an OpenTelemetry exporter or embed a dashboard. Compose development
 can use this block alone with its default Drivers; mount the same file into API
 and worker containers.
 
-The optional `runtime` block declares a runtime image built with native worker
-support, which dedicated native OpenClaw requires:
+The optional `runtime` block declares a custom runtime image with dedicated
+native OpenClaw support:
 
 ```yaml
 runtime:
   nativeWorkerSupport: custom-image
 ```
 
-`custom-image` is the only value. It is off by default, and no API or Agent
-Configuration field can set it. When set, the Installation API reports
-`capabilities.nativeWorkers` and admission accepts dedicated native OpenClaw.
-Declare it only for a runtime image built from an OpenClaw source with required
-worker placement and native worker inference. It is unsupported with the pinned
-runtime image, whose Gateways and Harnesses refuse to start. See
+`custom-image` is the only value. It is off by default; no API or Agent
+Configuration field can set it. Declare it only for an image with automatic
+required worker placement and node-local native inference. The pinned source
+accepts the node configuration but lacks complete placement activation, so it
+does not qualify. This declaration does not add runtime features or waive the
+required provisioning SandboxDriver and its containment facets. See
 [Native worker support](harness-execution.md#native-worker-support).
 
 ## Create, read, update, and delete
