@@ -9401,6 +9401,94 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   assert.deepEqual(otherHarness.slice(0, -1), mounts.slice(0, -1));
 });
 
+test("a Harness Deployment rendered with the old node-state volume still reads through sandboxWorkspaceMounts", () => {
+  const driver = createKubernetesComputeDriver(
+    options({
+      runtime: {
+        transportSecretPrefix: "transport",
+        gatewayStorageClassName: "local-path",
+      },
+    }),
+  );
+  const ownership = { namespaceId: tenant.id, agentId: "agent-old-node-state" };
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const harness = driver.deployment(
+    "agent",
+    { ...ownership, revisionId: "revision-old-shape" },
+    { name: namespace, plane: "execution" },
+    "agent:local",
+    "agent",
+    "agent",
+    {},
+    "info",
+    undefined,
+    undefined,
+    undefined,
+    preparedAuth(driver, namespace, false),
+  );
+  const revision = {
+    agentId: ownership.agentId,
+    id: "revision-old-shape",
+    harness: { id: "openclaw", mode: "dedicated" },
+    configuration: {},
+  };
+  const nodeName = driver.workspaceNodeName(revision);
+  const current = structuredClone(harness);
+  driver.addWorkspaceNode(current, nodeName, undefined, revision);
+  const currentPod = current.spec.template.spec;
+  const expected = driver.sandboxWorkspaceMounts(
+    currentPod.volumes,
+    currentPod.containers[0].volumeMounts,
+  );
+
+  // The shape rendered before the fix: a second volume name for the same claim.
+  const workspaceVolume = currentPod.volumes.find(({ name }) => name === "openclaw-workspace");
+  const oldVolumes = [
+    ...currentPod.volumes,
+    {
+      name: "openclaw-node-state",
+      persistentVolumeClaim: {
+        claimName: workspaceVolume.persistentVolumeClaim.claimName,
+      },
+    },
+  ];
+  const withOldNodeMount = (mutate) =>
+    currentPod.containers[0].volumeMounts.map((mount) =>
+      mount.mountPath === "/home/node/.openclaw-node"
+        ? { ...mount, name: "openclaw-node-state", ...mutate }
+        : mount,
+    );
+  const oldMounts = withOldNodeMount({});
+  assert.equal(
+    oldMounts.some(({ name }) => name === "openclaw-node-state"),
+    true,
+  );
+  assert.deepEqual(driver.sandboxWorkspaceMounts(oldVolumes, oldMounts), expected);
+  assert.deepEqual(driver.sandboxWorkspaceMounts(oldVolumes, oldMounts).at(-1), {
+    claimName: workspaceVolume.persistentVolumeClaim.claimName,
+    mountPath: "/home/node/.openclaw-node",
+    subPath: nodeName,
+    readOnly: false,
+  });
+
+  // The old shape is judged by the same rules: another claim, a read-only mount or a
+  // foreign subPath is refused, so rollback cannot widen what a node may reach.
+  const foreignClaim = oldVolumes.map((volume) =>
+    volume.name === "openclaw-node-state"
+      ? { ...volume, persistentVolumeClaim: { claimName: "some-other-claim" } }
+      : volume,
+  );
+  assert.throws(() => driver.sandboxWorkspaceMounts(foreignClaim, oldMounts), /node state/);
+  assert.throws(
+    () => driver.sandboxWorkspaceMounts(oldVolumes, withOldNodeMount({ readOnly: true })),
+    /node state/,
+  );
+  assert.throws(
+    () => driver.sandboxWorkspaceMounts(oldVolumes, withOldNodeMount({ subPath: "../escape" })),
+    /node state/,
+  );
+});
+
 test("runtime node selector schedules gateways and their private-state initialization together", () => {
   const driver = createKubernetesComputeDriver(
     options({
