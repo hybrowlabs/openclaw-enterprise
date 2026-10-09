@@ -63,3 +63,18 @@ test("the Mattermost proxy-routing patch is applied to the pinned OpenClaw sourc
   assert.match(text, /resolveMattermostWebSocketAgent/, "WebSocket goes through the env proxy");
   assert.doesNotMatch(text, /dangerouslyAllowPrivateNetwork/, "no private-network opt-in");
 });
+
+test("the runtime image replaces the Node base image's bundled npm tar (CVE-2026-59873, fixed in 7.5.19) with the pinned OpenClaw tar", () => {
+  assert.match(
+    dockerfile,
+    /\.pnpm\/tar@7\.5\.\*\/node_modules\/tar/,
+    "source is the tar OpenClaw already ships",
+  );
+  assert.match(
+    dockerfile,
+    /dst=\/usr\/local\/lib\/node_modules\/npm\/node_modules\/tar/,
+    "target is the tar bundled in the base image npm",
+  );
+  assert.match(dockerfile, /v\[1\]===5&&v\[2\]>=19/, "the build fails if the source tar is older than 7.5.19");
+  assert.match(dockerfile, /npm --version/, "npm still starts after the swap");
+});

@@ -246,6 +246,19 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && node /tmp/build-runtime-assets.mjs inventory /app/node_modules/openclaw /opt/oce/runtime \
   && rm /tmp/build-runtime-assets.mjs
 
+# HYBA-2011: the Node base image's bundled npm carries tar 7.5.16 (CVE-2026-59873, fixed in 7.5.19). Replace it with the tar
+# OpenClaw already ships (pinned by pnpm-lock.yaml); fail the build if that tar is older than 7.5.19 or npm stops working.
+RUN set -eu; \
+    src="$(ls -d /app/node_modules/openclaw/node_modules/.pnpm/tar@7.5.*/node_modules/tar | head -n 1)"; \
+    dst=/usr/local/lib/node_modules/npm/node_modules/tar; \
+    node -e 'const v=require(process.argv[1]+"/package.json").version.split(".").map(Number); if(!(v[0]===7&&(v[1]>5||(v[1]===5&&v[2]>=19)))) throw new Error("tar "+v.join(".")+" is older than 7.5.19")' "$src"; \
+    test -d "$dst"; \
+    rm -rf "$dst"; \
+    cp -R "$src" "$dst"; \
+    node -e 'const t=require("/usr/local/lib/node_modules/npm/node_modules/tar"); if(typeof t.c!=="function"||typeof t.x!=="function") throw new Error("npm tar is not usable")'; \
+    npm --version; \
+    find /usr/local/lib/node_modules/npm/node_modules -name package.json -path '*/tar/package.json' -exec grep -H '"version"' {} +
+
 COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
 COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist
 COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
