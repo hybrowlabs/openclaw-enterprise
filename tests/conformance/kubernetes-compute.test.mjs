@@ -5136,7 +5136,7 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.equal(
     worker.volumeMounts.some(
       ({ name, mountPath }) =>
-        name === "openclaw-node-state" && mountPath === "/home/node/.openclaw-node",
+        name === "openclaw-workspace" && mountPath === "/home/node/.openclaw-node",
     ),
     true,
   );
@@ -9348,11 +9348,47 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
     undefined,
     revision,
   );
-  const initialization = initializedHarness.spec.template.spec.initContainers[0].args[0];
+  const initializedPod = initializedHarness.spec.template.spec;
+  const initialization = initializedPod.initContainers[0].args[0];
   assert.match(initialization, /chmodSync\(path, 0o700\)/);
   assert.equal(
-    initialization.includes(`/workspace-node-state/${driver.workspaceNodeName(revision)}`),
+    initialization.includes(`/harness-workspace-state/${driver.workspaceNodeName(revision)}`),
     true,
+  );
+  // One PVC must be one pod volume: the kubelet collapses two volume names for one
+  // attachable (CSI block) PV into one and never finishes the mount.
+  const claimNames = initializedPod.volumes
+    .filter(({ persistentVolumeClaim }) => persistentVolumeClaim !== undefined)
+    .map(({ persistentVolumeClaim }) => persistentVolumeClaim.claimName);
+  assert.equal(new Set(claimNames).size, claimNames.length, "a claim is declared once");
+  assert.equal(
+    initializedPod.volumes.some(({ name }) => name === "openclaw-node-state"),
+    false,
+  );
+  assert.equal(
+    [initializedPod.initContainers[0], initializedPod.containers[0]]
+      .flatMap(({ volumeMounts }) => volumeMounts)
+      .some(({ name }) => name === "openclaw-node-state"),
+    false,
+  );
+  assert.deepEqual(
+    initializedPod.initContainers[0].volumeMounts.filter(
+      ({ name }) => name === "openclaw-workspace",
+    ),
+    [{ name: "openclaw-workspace", mountPath: "/harness-workspace-state" }],
+  );
+  assert.deepEqual(
+    initializedPod.containers[0].volumeMounts.filter(
+      ({ mountPath }) => mountPath === "/home/node/.openclaw-node",
+    ),
+    [
+      {
+        name: "openclaw-workspace",
+        mountPath: "/home/node/.openclaw-node",
+        subPath: driver.workspaceNodeName(revision),
+        readOnly: false,
+      },
+    ],
   );
   const node = mounts.find(({ mountPath }) => mountPath === "/home/node/.openclaw-node");
   assert.equal(new Set(mounts.map(({ claimName }) => claimName)).size, 1);

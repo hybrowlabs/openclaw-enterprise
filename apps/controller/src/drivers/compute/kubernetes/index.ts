@@ -8522,25 +8522,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
         readOnly: true,
       });
     }
-    (pod.volumes as V1Volume[]).push({
-      name: NODE_STATE_VOLUME,
-      persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(revision.agentId) },
-    });
+    // The node directory lives on the Harness workspace volume, reached by subPath. A
+    // second pod volume for the same claim hangs the kubelet on attachable (CSI) storage.
     // Create the private subdirectory as the runtime user before kubelet mounts it.
     // A kubelet-created subPath is root-owned; native setup cannot tighten its mode.
     const initialization = (pod.initContainers as KubernetesRecord[])[0]!;
-    (initialization.volumeMounts as V1VolumeMount[]).push({
-      name: NODE_STATE_VOLUME,
-      mountPath: "/workspace-node-state",
-    });
-    const nodeStatePath = `/workspace-node-state/${name}`;
+    const nodeStatePath = `/harness-workspace-state/${name}`;
     (initialization.args as string[])[0] += `
 mkdirSync(${JSON.stringify(nodeStatePath)}, { recursive: true, mode: 0o700 });
 chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     // Reuse Harness storage outside the project directory. The Agent-scoped
     // subpath preserves node identity across Pod and AgentRevision replacement.
     (container.volumeMounts as V1VolumeMount[]).push({
-      name: NODE_STATE_VOLUME,
+      name: HARNESS_WORKSPACE_VOLUME,
       mountPath: NODE_STATE_PATH,
       subPath: name,
       readOnly: false,
@@ -8798,8 +8792,17 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       "Harness workspace claim",
     );
     const observedMounts = Array.isArray(volumeMounts) ? volumeMounts : [];
+    const nodeStateSubPathMount = observedMounts.filter(
+      (item) =>
+        asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME &&
+        asRecord(item)?.mountPath === NODE_STATE_PATH,
+    );
     const workspaceMounts = observedMounts
-      .filter((item) => asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME)
+      .filter(
+        (item) =>
+          asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME &&
+          asRecord(item)?.mountPath !== NODE_STATE_PATH,
+      )
       .map((item) => {
         const mount = asRecord(item);
         return {
@@ -8827,15 +8830,21 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         );
       }
     }
+    // A node directory is a subPath on the workspace volume. A Deployment rendered
+    // before this change still carries a second volume for the same claim; accept it.
     const nodeVolume = observedVolumes.find((item) => asRecord(item)?.name === NODE_STATE_VOLUME);
-    if (nodeVolume !== undefined) {
-      const nodeClaim = required(
-        asRecord(asRecord(nodeVolume)?.persistentVolumeClaim)?.claimName,
-        "Harness node state claim",
-      );
-      const nodeMounts = observedMounts.filter(
-        (item) => asRecord(item)?.name === NODE_STATE_VOLUME,
-      );
+    const nodeMounts =
+      nodeVolume !== undefined
+        ? observedMounts.filter((item) => asRecord(item)?.name === NODE_STATE_VOLUME)
+        : nodeStateSubPathMount;
+    if (nodeVolume !== undefined || nodeMounts.length > 0) {
+      const nodeClaim =
+        nodeVolume === undefined
+          ? claimName
+          : required(
+              asRecord(asRecord(nodeVolume)?.persistentVolumeClaim)?.claimName,
+              "Harness node state claim",
+            );
       const mount = asRecord(nodeMounts[0]);
       if (
         nodeClaim !== claimName ||

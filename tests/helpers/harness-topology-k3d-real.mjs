@@ -2993,10 +2993,7 @@ function assertPrivateStateInitContainer(pod) {
         { name: "runtime-temporary", mountPath: "/runtime-temporary" },
         ...(pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway"
           ? [{ name: "openclaw-gateway-state", mountPath: "/gateway-state" }]
-          : [
-              { name: "openclaw-workspace", mountPath: "/harness-workspace-state" },
-              { name: "openclaw-node-state", mountPath: "/workspace-node-state" },
-            ]),
+          : [{ name: "openclaw-workspace", mountPath: "/harness-workspace-state" }]),
       ],
       [],
       [],
