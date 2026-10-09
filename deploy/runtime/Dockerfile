@@ -116,7 +116,7 @@ COPY --from=openclaw-source /source/ ./
 # separate when a plugin and core require different versions.
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
 RUN OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS=codex,mattermost,slack \
-    OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" \
+    OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" \
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm_config_verify_deps_before_run=false \
     pnpm build:docker \
     && pnpm_config_verify_deps_before_run=false pnpm ui:build

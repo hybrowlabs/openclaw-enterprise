@@ -40,8 +40,8 @@ test("the runtime build can be given an explicit tsdown heap (rootless builders 
   assert.match(dockerfile, /^ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""$/m, "build arg with an empty default");
   assert.match(
     dockerfile,
-    /OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB="\$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB"[\s\S]*?pnpm build:docker/,
-    "passed to pnpm build:docker",
+    /OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="\$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB"[\s\S]*?pnpm build:docker/,
+    "passed to pnpm build:docker under the variable tsdown-build.mts reads (OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB)",
   );
 });
 
