@@ -1,0 +1,253 @@
+name: OCE Mattermost images (gated)
+
+# HYBA-2011. Builds the OCE runtime and controller images from a hybrow/* commit, runs the same gates as the Jenkins job
+# (unit tests, plugin gate, SBOM, Trivy CRITICAL gate with a validated per-tag allowlist), pushes by digest to GHCR only after
+# the gate passes, re-scans the pushed digests, and checks the image layers for baked-in credentials (manual start only).
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-hex commit on a hybrow/* branch of this repository
+        required: true
+        type: string
+      image_tag:
+        description: Tag to push for both images (plain tag, not latest)
+        required: true
+        type: string
+      push:
+        description: Push to GHCR after the gates pass (false = build and gate only)
+        required: false
+        type: boolean
+        default: false
+      trivy_ignore_yaml:
+        description: Optional approved Trivy allowlist for this tag only (same rules as the Jenkins job). Empty = gate unchanged.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: oce-image-gated
+  cancel-in-progress: false
+
+env:
+  NODE_BASE_IMAGE: docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
+  RUNTIME_REPO: ghcr.io/hybrowlabs/oce-runtime
+  CONTROLLER_REPO: ghcr.io/hybrowlabs/oce-controller
+  TRIVY_VERSION: "0.69.3"
+  TRIVY_SHA256: 1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75
+  SYFT_VERSION: "1.54.0"
+  SYFT_SHA256: 54a87372498168b2d033e876fd41fa4e8035b872699e525a57046e1f2f09c860
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Check inputs
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be 40 lowercase hex"; exit 1; }
+          [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$IMAGE_TAG" != "latest" ]] || { echo "image_tag must be a plain tag and not latest"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the commit is on a hybrow branch
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ] || { echo "HEAD is not source_sha"; exit 1; }
+          git branch -r --contains "$SOURCE_SHA" | grep -Eq '^\s*origin/hybrow/' || { echo "commit is not on an origin/hybrow/* branch"; exit 1; }
+          grep -q 'OPENCLAW_EXTENSIONS=codex,mattermost,slack' deploy/runtime/Dockerfile || { echo "runtime Dockerfile does not select the mattermost plugin"; exit 1; }
+
+      - name: Check the allowlist
+        env:
+          TRIVY_IGNORE_YAML: ${{ inputs.trivy_ignore_yaml }}
+          ALLOWLIST_SCOPE: ghcr.io/hybrowlabs/oce-runtime:${{ inputs.image_tag }}
+        run: bash scripts/ci/oce-trivy-allowlist.sh
+
+      - name: Install scan tools
+        run: |
+          set -euo pipefail
+          d="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "$d/trivy.tgz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 -o "$d/syft.tgz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${TRIVY_SHA256}  $d/trivy.tgz" | sha256sum -c - >/dev/null
+          echo "${SYFT_SHA256}  $d/syft.tgz" | sha256sum -c - >/dev/null
+          mkdir -p "$HOME/bin"
+          tar -xzf "$d/trivy.tgz" -C "$HOME/bin" trivy
+          tar -xzf "$d/syft.tgz" -C "$HOME/bin" syft
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force >/dev/null
+          df -h / | tail -1
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          grep -vx 'tests/' .dockerignore > unit.Dockerfile.dockerignore
+          cat > unit.Dockerfile <<'DOCKERFILE'
+          ARG NODE_BASE_IMAGE
+          FROM ${NODE_BASE_IMAGE}
+          WORKDIR /app
+          COPY . /app
+          RUN corepack pnpm install --frozen-lockfile --ignore-scripts
+          RUN node --test tests/conformance/mattermost-proxy.test.mjs tests/integration/runtime-mattermost-plugin.test.mjs tests/integration/oce-image-workflow.test.mjs tests/conformance/slack-proxy-tunnel.test.mjs tests/conformance/slack-proxy-reset.test.mjs
+          RUN node --test --test-name-pattern="native channel providers require" tests/conformance/kubernetes-compute.test.mjs
+          DOCKERFILE
+          sed -i 's/^          //' unit.Dockerfile
+          docker buildx build --progress=plain --no-cache --provenance=false --output type=cacheonly \
+            --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" -f unit.Dockerfile . 2>&1 | tee unit-tests.log | tail -n 40
+          echo "unit tests: passed"
+
+      - name: Build runtime
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          created="$(date -u +%FT%TZ)"
+          timeout 150m docker buildx build --progress=plain --load --no-cache --provenance=false -f deploy/runtime/Dockerfile \
+            --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" --build-arg "OCC_BUILD_REVISION=$SOURCE_SHA" \
+            --build-arg OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096 \
+            --label "org.opencontainers.image.source=https://github.com/hybrowlabs/openclaw-enterprise" \
+            --label "org.opencontainers.image.created=$created" \
+            -t "$RUNTIME_REPO:$IMAGE_TAG" . > build.log 2>&1 || { tail -n 200 build.log; exit 1; }
+          tail -n 100 build.log
+          label="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$RUNTIME_REPO:$IMAGE_TAG")"
+          [ "$label" = "$SOURCE_SHA" ] || { echo "OCI revision label '$label' is not source_sha"; exit 1; }
+          echo "oci revision label: $label"
+
+      - name: Build controller
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          created="$(date -u +%FT%TZ)"
+          timeout 60m docker buildx build --progress=plain --load --no-cache --provenance=false -f Dockerfile --target runtime \
+            --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" --build-arg "OCC_BUILD_REVISION=$SOURCE_SHA" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/hybrowlabs/openclaw-enterprise" \
+            --label "org.opencontainers.image.created=$created" \
+            -t "$CONTROLLER_REPO:$IMAGE_TAG" . > build-controller.log 2>&1 || { tail -n 200 build-controller.log; exit 1; }
+          tail -n 60 build-controller.log
+          docker run --rm --network none --entrypoint test "$CONTROLLER_REPO:$IMAGE_TAG" -f /app/apps/controller/src/mattermost-proxy.mjs
+          echo "controller image carries mattermost-proxy.mjs"
+
+      - name: Plugin gate
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint test "$RUNTIME_REPO:$IMAGE_TAG" -f /app/dist/extensions/mattermost/openclaw.plugin.json
+          echo "plugin gate: /app/dist/extensions/mattermost/openclaw.plugin.json present"
+          docker run --rm --network none --entrypoint node "$RUNTIME_REPO:$IMAGE_TAG" /app/openclaw.mjs channels list --all --json > channels.json
+          grep -q '"mattermost"' channels.json || { echo "plugin gate: gateway does not list the mattermost channel"; exit 1; }
+          echo "plugin gate: gateway lists the mattermost channel"
+
+      - name: SBOM and scan
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          syft "$RUNTIME_REPO:$IMAGE_TAG" -o spdx-json=sbom-runtime.spdx.json
+          syft "$CONTROLLER_REPO:$IMAGE_TAG" -o spdx-json=sbom-controller.spdx.json
+          trivy image --timeout 30m --format json --output trivy-runtime.json --exit-code 0 "$RUNTIME_REPO:$IMAGE_TAG"
+          trivy image --timeout 30m --format json --output trivy-controller.json --exit-code 0 "$CONTROLLER_REPO:$IMAGE_TAG"
+          ig=""
+          if [ -f trivy-allowlist.yaml ]; then ig="--ignorefile trivy-allowlist.yaml"; echo "scan gate: using the approved allowlist for this tag"; fi
+          trivy image --timeout 30m $ig --severity CRITICAL --exit-code 1 --no-progress "$RUNTIME_REPO:$IMAGE_TAG" > trivy-critical-runtime.txt 2>&1 || { cat trivy-critical-runtime.txt; echo "scan gate: CRITICAL findings, not pushing"; exit 1; }
+          trivy image --timeout 30m $ig --severity CRITICAL --exit-code 1 --no-progress "$CONTROLLER_REPO:$IMAGE_TAG" > trivy-critical-controller.txt 2>&1 || { cat trivy-critical-controller.txt; echo "scan gate: CRITICAL findings, not pushing"; exit 1; }
+          cat trivy-critical-runtime.txt trivy-critical-controller.txt
+          echo "scan gate: no CRITICAL findings"
+
+      - name: Layer check
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          for img in "$RUNTIME_REPO:$IMAGE_TAG" "$CONTROLLER_REPO:$IMAGE_TAG"; do
+            echo "== $img"
+            docker history --no-trunc --format '{{.CreatedBy}}' "$img" > "history-$(basename "${img%%:*}").txt"
+            docker save "$img" | tar -xO --wildcards '*/layer.tar' 2>/dev/null | tar -t 2>/dev/null > "files-$(basename "${img%%:*}").txt" || true
+          done
+          {
+            echo "history lines that mention secret-like words:"
+            grep -n -i -E 'token|secret|password|kubeconfig|\.env|api[_-]?key|BEGIN [A-Z ]*PRIVATE' history-*.txt | cut -c1-200 || echo "none"
+            echo "files that look like secrets:"
+            grep -E '(^|/)(\.env|\.env\..*|kubeconfig|id_rsa|id_ed25519|\.npmrc|\.netrc|credentials|\.git-credentials|\.docker/config\.json)$|\.pem$|\.key$' files-*.txt | head -50 || echo "none"
+          } | tee layer-check.txt
+          if grep -E '(^|/)(\.env|kubeconfig|id_rsa|id_ed25519|\.npmrc|\.netrc|\.git-credentials)$' files-*.txt >/dev/null; then echo "layer check: secret-like file found"; exit 1; fi
+          echo "layer check: no secret-like file in any layer"
+
+      - name: Push
+        if: ${{ inputs.push }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "$RUNTIME_REPO:$IMAGE_TAG" > push-runtime.log
+          docker push "$CONTROLLER_REPO:$IMAGE_TAG" > push-controller.log
+          docker buildx imagetools inspect "$RUNTIME_REPO:$IMAGE_TAG" --format '{{.Manifest.Digest}}' > digest-runtime.txt
+          docker buildx imagetools inspect "$CONTROLLER_REPO:$IMAGE_TAG" --format '{{.Manifest.Digest}}' > digest-controller.txt
+          echo "runtime    $RUNTIME_REPO@$(cat digest-runtime.txt)"
+          echo "controller $CONTROLLER_REPO@$(cat digest-controller.txt)"
+
+      - name: Scan pushed digests
+        if: ${{ inputs.push }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          ig=""
+          [ -f trivy-allowlist.yaml ] && ig="--ignorefile trivy-allowlist.yaml"
+          for r in runtime controller; do
+            repo="$RUNTIME_REPO"; [ "$r" = controller ] && repo="$CONTROLLER_REPO"
+            docker pull "$repo@$(cat digest-$r.txt)" > /dev/null
+            trivy image --timeout 30m $ig --severity CRITICAL --exit-code 1 --no-progress "$repo@$(cat digest-$r.txt)" > "trivy-pushed-$r.txt" 2>&1 || { cat "trivy-pushed-$r.txt"; echo "pushed digest has CRITICAL findings"; exit 1; }
+          done
+          echo "pushed digests: no CRITICAL findings"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: oce-image-evidence-${{ inputs.image_tag }}
+          if-no-files-found: warn
+          path: |
+            unit-tests.log
+            build.log
+            build-controller.log
+            channels.json
+            sbom-runtime.spdx.json
+            sbom-controller.spdx.json
+            trivy-runtime.json
+            trivy-controller.json
+            trivy-critical-runtime.txt
+            trivy-critical-controller.txt
+            trivy-pushed-runtime.txt
+            trivy-pushed-controller.txt
+            trivy-allowlist.yaml
+            layer-check.txt
+            digest-runtime.txt
+            digest-controller.txt
